@@ -14,3 +14,16 @@
 .speaker-review-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #edf1ee;font-size:12px}.speaker-review-row>span{flex:1;line-height:1.6;overflow-wrap:anywhere}.speaker-controls{display:flex;gap:8px;flex-wrap:wrap}.speaker-controls select,.speaker-controls input{max-width:220px;padding:8px;border:1px solid #dce4df;border-radius:6px;background:#fff}.speaker-controls [hidden]{display:none}@media(max-width:700px){.speaker-review-row{flex-direction:column}.speaker-controls select,.speaker-controls input{max-width:100%}}
 
 .speech-select{display:block;margin-top:8px;font-size:12px;color:#496e5d}.speech-select input{vertical-align:middle}
+
+/* 录音处理工作区 */
+.speech-workspace{margin-top:24px;padding:20px;border:1px solid #dfe9e2;border-radius:10px;background:#fff}
+.speech-workspace[hidden],.speech-workspace [hidden]{display:none}
+.speech-workspace-header,.chunk-section-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.speech-workspace-header h4,.chunk-section-heading h4{margin:6px 0}.speech-workspace-header p,.chunk-section-heading p{margin:4px 0}
+.speech-workspace-tabs{display:flex;gap:8px;overflow-x:auto;margin:18px 0 22px;padding-bottom:8px;border-bottom:1px solid #e6ece8}
+.speech-tab{border:1px solid transparent;border-radius:7px;background:transparent;padding:9px 14px;color:#60766a;white-space:nowrap;cursor:pointer;font:inherit;font-size:13px}
+.speech-tab:hover{background:#f0f6f2}.speech-tab.active{background:#e9f4ec;color:#255f49;border-color:#c8dfd0;font-weight:700}
+.speech-workspace [data-speech-panel]>h4{margin:0 0 6px}.speech-workspace .transcript-editor{margin-top:10px}
+.chunk-actions{display:flex;gap:8px;flex-wrap:wrap}.chunk-list{display:grid;gap:10px;margin-top:14px}.chunk-card{border:1px solid #e1eae4;border-radius:8px;padding:12px;background:#fcfefc}
+.chunk-card summary{cursor:pointer;font-size:13px;font-weight:650;color:#315a46}.chunk-card pre{max-height:320px;overflow:auto;line-height:1.65;font:inherit;font-size:13px;color:#30483a}.chunk-result:not(:empty){padding:12px;background:#f2f7f3;border-radius:6px}
+@media(max-width:700px){.speech-workspace{padding:14px}.speech-workspace-header,.chunk-section-heading{flex-direction:column}.speech-workspace-header>.button,.chunk-actions{width:100%}.chunk-actions .button{flex:1}}

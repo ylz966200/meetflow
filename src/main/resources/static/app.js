@@ -311,11 +311,34 @@ async function setupTranscription(id, editor, transcriptVersion) {
     <button type="button" class="button primary" id="speech-upload">上传录音</button>
     <section class="speech-history"><div class="speech-history-heading"><h4>会议录音</h4><button type="button" class="button outline" id="recordings-refresh">刷新状态</button></div>
     <p class="tiny-note">勾选多条已成功转写的录音，按勾选顺序合并为文字稿草稿。</p><button type="button" class="button outline" id="speech-assemble">合并选中结果</button> <button type="button" class="button primary" id="speech-organize">AI 整理选中结果</button> <span class="tiny-note" id="speech-selected-count">已选择 0 条</span><div id="recordings-list" role="list" aria-label="会议录音列表"></div><details class="speech-unlinked"><summary>未关联录音的历史任务</summary><div id="unlinked-history"></div></details><div class="speech-pages"><button type="button" class="button outline" id="recordings-prev">上一页</button><span id="recordings-page"></span><button type="button" class="button outline" id="recordings-next">下一页</button></div></section>
-    <p id="speech-message" class="tiny-note" role="status"></p><section id="speech-preview" hidden><h4 id="speech-preview-title">转写结果预览</h4><textarea id="speech-result" class="transcript-editor" readonly aria-label="转写结果预览"></textarea><div id="speaker-review"></div><details id="chunk-preview"><summary>预览技术分段</summary><p class="tiny-note">仅按长度与发言边界切分，不调用 AI；上文仅供参考。</p><button type="button" class="button outline" id="chunk-preview-load">加载分段</button><div id="chunk-preview-list"></div></details><div class="dialog-actions"><button type="button" class="button outline" id="speech-import">导入文字稿</button></div></section>`;
+    <p id="speech-message" class="tiny-note" role="status"></p>
+    <section id="speech-preview" class="speech-workspace" hidden>
+      <div class="speech-workspace-header"><div><span class="section-kicker">RECORDING WORKSPACE</span><h4 id="speech-preview-title">转写结果</h4><p class="tiny-note">校对说话人后，按顺序提取分段，再生成汇总。</p></div><button type="button" class="button outline" id="speech-import">导入文字稿</button></div>
+      <nav class="speech-workspace-tabs" aria-label="录音处理步骤">
+        <button type="button" class="speech-tab active" data-speech-tab="transcript" aria-current="step">1 文字稿</button>
+        <button type="button" class="speech-tab" data-speech-tab="review">2 说话人校对</button>
+        <button type="button" class="speech-tab" data-speech-tab="chunks">3 分段提取</button>
+        <button type="button" class="speech-tab" data-speech-tab="summary">4 汇总分析</button>
+      </nav>
+      <section data-speech-panel="transcript"><h4>转写正文</h4><p class="tiny-note">预览当前识别内容；完成说话人校对后，可导入会议文字稿编辑区。</p><textarea id="speech-result" class="transcript-editor" readonly aria-label="转写结果预览"></textarea><div class="dialog-actions"><button type="button" class="button outline" data-speech-go="review">下一步：校对说话人</button></div></section>
+      <section data-speech-panel="review" hidden><div id="speaker-review"></div><div class="dialog-actions"><button type="button" class="button outline" data-speech-go="chunks">下一步：分段提取</button></div></section>
+      <section data-speech-panel="chunks" hidden><div class="chunk-section-heading"><div><h4>分段候选信息</h4><p class="tiny-note">先加载分段，再逐段提取。提取期间请保持页面打开。</p></div><div class="chunk-actions"><button type="button" class="button outline" id="chunk-preview-load">加载分段</button><button type="button" class="button primary" id="chunk-extract-all" disabled>提取全部分段</button></div></div><p class="tiny-note" id="chunk-extract-progress" role="status"></p><div id="chunk-preview-list" class="chunk-list"></div><div class="dialog-actions"><button type="button" class="button outline" data-speech-go="summary">下一步：汇总分析</button></div></section>
+      <section data-speech-panel="summary" hidden><div class="chunk-section-heading"><div><h4>会议分析草稿</h4><p class="tiny-note">所有分段提取完成后生成，请对照来源人工核对。</p></div><button type="button" class="button primary" id="chunk-summary" disabled>汇总所有分段</button></div><p id="chunk-summary-status" class="tiny-note" role="status"></p><textarea id="chunk-summary-content" class="transcript-editor" readonly aria-label="分段汇总结果" placeholder="完成分段提取后，点击上方按钮生成汇总草稿。"></textarea></section>
+    </section>`;
   editor.closest('.panel').append(box);
   const list=el('recordings-list'), message=el('speech-message'), preview=el('speech-preview'), result=el('speech-result');
   let page=0, requestSeq=0, previewSeq=0, selectedTask=null, historyOpen=null, refreshTimer=null, review=null, reviewMembers=[], reviewDirty=false, reviewPage=0;
-  const busy=new Set(), selectedSources=new Map(), pendingExtractions=new Map(), pageSize=20;let pendingOrganize=null;
+  function showSpeechPanel(name){
+    if(reviewDirty && (name==='chunks'||name==='summary'))message.textContent='说话人校对有未保存修改，请先回到校对页面保存。';
+    for(const panel of box.querySelectorAll('[data-speech-panel]'))panel.hidden=panel.dataset.speechPanel!==name;
+    for(const tab of box.querySelectorAll('[data-speech-tab]')){
+      const selected=tab.dataset.speechTab===name;tab.classList.toggle('active',selected);
+      if(selected)tab.setAttribute('aria-current','step');else tab.removeAttribute('aria-current');
+    }
+  }
+  box.querySelectorAll('[data-speech-tab]').forEach(tab=>tab.addEventListener('click',()=>showSpeechPanel(tab.dataset.speechTab)));
+  box.querySelectorAll('[data-speech-go]').forEach(button=>button.addEventListener('click',()=>showSpeechPanel(button.dataset.speechGo)));
+  const busy=new Set(), selectedSources=new Map(), pendingExtractions=new Map(), pageSize=20;let pendingOrganize=null, chunkItems=[], chunkRunning=false, chunkInFlight=false, pendingSummary=null;
   const taskLabels={ [STATUS.SUBMITTING]:'提交中', [STATUS.PROCESSING]:'识别中', [STATUS.UNKNOWN]:'状态待确认', [STATUS.SUCCEEDED]:'识别成功', [STATUS.FAILED]:'识别失败' };
   const active = s => [STATUS.SUBMITTING, STATUS.PROCESSING, STATUS.UNKNOWN].includes(s);
   const url = suffix => `/api/meetings/${encodeURIComponent(id)}/transcriptions${suffix}`;
@@ -343,14 +366,15 @@ async function setupTranscription(id, editor, transcriptVersion) {
     const head=document.createElement('p');head.className='tiny-note';head.textContent='逐句修正（未知说话人请逐句确认）';container.append(head);
     const size=30,start=reviewPage*size;for(let i=start;i<Math.min(start+size,selectedTask.segments.length);i++){const segment=selectedTask.segments[i],row=document.createElement('div');row.className='speaker-review-row';const text=document.createElement('span');text.textContent=`${i+1}. [${segment.speakerLabel==='unknown'?'未知':segment.speakerLabel}] ${segment.text}`;row.append(text,personControls(review.assignments[i],a=>{review.assignments[i]=a;reviewDirty=true;refreshPreview();}));container.append(row);}
     const pages=document.createElement('div');pages.className='speech-pages';pages.append(button('上一页',()=>{reviewPage--;renderReview();},reviewPage===0));const number=document.createElement('span');number.textContent=`第 ${reviewPage+1} 页`;pages.append(number,button('下一页',()=>{reviewPage++;renderReview();},start+size>=selectedTask.segments.length));container.append(pages);
-    const save=button('保存说话人校对',async()=>{const savingTask=selectedTask.id,savingSeq=previewSeq;save.disabled=true;container.inert=true;try{const r=await api(url(`/${encodeURIComponent(savingTask)}/speaker-review`),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(review)});if(r.status===409)throw new Error('校对内容已被其他人修改，请重新打开转写结果。');if(r.status===400)throw new Error('说话人信息无效，请检查会议成员和外部姓名。');if(!r.ok)throw new Error('保存校对失败，请稍后重试。');const saved=await r.json();if(savingSeq!==previewSeq||selectedTask?.id!==savingTask)return;review=saved;reviewDirty=false;refreshPreview();message.textContent='说话人校对已保存。';}catch(e){if(savingSeq===previewSeq)message.textContent=e.message||'保存失败。';}finally{save.disabled=false;container.inert=false;}});container.append(save);
+    const save=button('保存说话人校对',async()=>{const savingTask=selectedTask.id,savingSeq=previewSeq;save.disabled=true;container.inert=true;try{const r=await api(url(`/${encodeURIComponent(savingTask)}/speaker-review`),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(review)});if(r.status===409)throw new Error('校对内容已被其他人修改，请重新打开转写结果。');if(r.status===400)throw new Error('说话人信息无效，请检查会议成员和外部姓名。');if(!r.ok)throw new Error('保存校对失败，请稍后重试。');const saved=await r.json();if(savingSeq!==previewSeq||selectedTask?.id!==savingTask)return;const reviewChanged=review.version!==saved.version;review=saved;reviewDirty=false;refreshPreview();if(reviewChanged){chunkItems=[];pendingSummary=null;el('chunk-preview-list').replaceChildren();el('chunk-summary-content').value='';el('chunk-summary-status').textContent='';el('chunk-extract-all').disabled=true;updateChunkProgress();}message.textContent=reviewChanged?'说话人校对已保存，请重新加载分段。':'说话人校对已保存。';}catch(e){if(savingSeq===previewSeq)message.textContent=e.message||'保存失败。';}finally{save.disabled=false;container.inert=false;}});container.append(save);
   }
   async function showTask(taskId, filename){
+    if(chunkRunning||chunkInFlight){message.textContent='分段提取进行中，请稍后切换录音。';return;}
     if(reviewDirty&&!confirm('当前说话人校对尚未保存，切换后会丢失修改，确定继续吗？'))return;
     const seq=++previewSeq;message.textContent='正在加载转写结果…';
     try{const [r,people,reviewResponse]=await Promise.all([api(url(`/${encodeURIComponent(taskId)}`)),api(`/api/meetings/${encodeURIComponent(id)}/members`),api(url(`/${encodeURIComponent(taskId)}/speaker-review`))]);if(!r.ok||!people.ok||!reviewResponse.ok)throw new Error('读取转写结果或说话人校对失败，请重试。');const [data,members,reviewData]=await Promise.all([r.json(),people.json(),reviewResponse.json()]);if(seq!==previewSeq||!document.contains(box))return;
       if(data.status!==STATUS.SUCCEEDED){message.textContent=`${filename}：${taskLabels[data.status]||'状态未知'}`;return;}
-      selectedTask=data;review=reviewData;reviewMembers=members;reviewDirty=false;reviewPage=0;el('chunk-preview').open=false;el('chunk-preview-list').replaceChildren();preview.hidden=false;el('speech-preview-title').textContent=`转写结果预览：${filename}`;
+      selectedTask=data;review=reviewData;reviewMembers=members;reviewDirty=false;reviewPage=0;showSpeechPanel('transcript');el('chunk-preview-list').replaceChildren();chunkItems=[];el('chunk-extract-all').disabled=true;el('chunk-extract-progress').textContent='';el('chunk-summary').disabled=true;el('chunk-summary-content').value='';el('chunk-summary-status').textContent='';pendingSummary=null;preview.hidden=false;el('speech-preview-title').textContent=`转写结果预览：${filename}`;
       refreshPreview();renderReview();message.textContent=data.segments.length?'请核对说话人和内容。':'未识别到人声或文本。';
     }catch(e){if(seq===previewSeq&&document.contains(box))message.textContent=e.message||'读取转写结果失败。';}
   }
@@ -398,7 +422,125 @@ async function setupTranscription(id, editor, transcriptVersion) {
   el('speech-assemble').onclick=async()=>{if(!selectedSources.size){message.textContent='请先勾选需要合并的成功转写结果。';return;}if(reviewDirty){message.textContent='请先保存正在编辑的说话人校对。';return;}if(editor.value&&!confirm('合并将替换当前文字稿编辑区，请先确认已保存。继续吗？'))return;const before=editor.value,btn=el('speech-assemble');btn.disabled=true;message.textContent='正在合并选中的转写内容…';try{const r=await api(url('/assemble'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({taskIds:[...selectedSources.values()]})});if(!r.ok)throw new Error('合并失败，请检查所选结果是否仍可用。');const data=await r.json();if(editor.value!==before&&!confirm('文字稿在合并期间发生了修改，确定用合并结果覆盖吗？'))return;editor.value=data.content;delete editor.dataset.aiDraftId;message.textContent='已按勾选顺序合并到文字稿编辑区，请核对后保存；本次合并未使用 AI。';}catch(e){message.textContent=e.message||'合并失败，请稍后重试。';}finally{btn.disabled=false;}};
   el('recordings-refresh').onclick=()=>loadRecordings(page);el('recordings-prev').onclick=()=>{historyOpen=null;loadRecordings(page-1);};el('recordings-next').onclick=()=>{historyOpen=null;loadRecordings(page+1);};
   el('speech-upload').onclick=async()=>{const file=el('speech-file').files[0], b=el('speech-upload');if(!file){message.textContent='请选择录音文件。';return;}if(file.size>100*1024*1024){message.textContent='录音文件不能超过 100 MB。';return;}b.disabled=true;message.textContent='正在上传，请勿关闭页面…';try{const form=new FormData();form.append('file',file);const r=await api(url('/upload'),{method:'POST',body:form});if(!r.ok)throw new Error(r.status===503?'请先配置 TOS 凭证。':'上传失败，请检查录音格式及 TOS 配置。');el('speech-file').value='';message.textContent='上传成功，请在录音列表中开始转写。';historyOpen=null;await loadRecordings(0);}catch(e){message.textContent=e.message||'上传失败，请稍后重试。';}finally{b.disabled=false;}};
-  el('chunk-preview-load').onclick=async()=>{if(!selectedTask)return;if(reviewDirty){message.textContent='请先保存说话人校对后再预览分段。';return;}const taskId=selectedTask.id,area=el('chunk-preview-list'),b=el('chunk-preview-load');b.disabled=true;area.textContent='正在加载…';try{const r=await api(url(`/${encodeURIComponent(taskId)}/chunks/preview`));if(!r.ok)throw new Error('分段预览失败，请稍后重试。');const chunks=await r.json();if(selectedTask?.id!==taskId||!document.contains(box))return;area.replaceChildren();for(const chunk of chunks){const detail=document.createElement('details'),title=document.createElement('summary'),pre=document.createElement('pre');title.textContent=`第 ${chunk.chunkIndex} 段 · 正文 ${chunk.textChars} 字符 · 上文 ${chunk.contextBefore.length} 条`;pre.style.whiteSpace='pre-wrap';pre.style.overflowWrap='anywhere';const format=u=>`[片段 ${u.segmentIndex+1}] ${u.speaker}：${u.text}`;pre.textContent='【参考上文】\n'+chunk.contextBefore.map(format).join('\n')+'\n\n【当前正文】\n'+chunk.utterances.map(format).join('\n');detail.append(title,pre);const extract=document.createElement('button'),output=document.createElement('pre');extract.type='button';extract.className='button outline';extract.textContent='AI 提取本段';output.style.whiteSpace='pre-wrap';output.style.overflowWrap='anywhere';extract.onclick=async()=>{if(!globalThis.crypto?.randomUUID){output.textContent='当前浏览器无法生成请求标识。';return;}if(reviewDirty){output.textContent='请先保存说话人校对，再重新加载分段。';return;}const fingerprint=`${taskId}:${chunk.chunkIndex}:${chunk.speakerReviewVersion}`;let key=pendingExtractions.get(fingerprint);if(!key){key=crypto.randomUUID();pendingExtractions.set(fingerprint,key);}extract.disabled=true;output.textContent='正在提取候选信息…';try{const response=await api(url(`/${encodeURIComponent(taskId)}/chunks/${chunk.chunkIndex}/extract`),{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':key},body:JSON.stringify({speakerReviewVersion:chunk.speakerReviewVersion})});if(response.status===425)throw new Error('请求仍在处理中，请稍后点击重试查询。');if(!response.ok){if([400,404,409,502,503].includes(response.status))pendingExtractions.delete(fingerprint);let reason='提取失败，请检查配置或重新加载分段。';try{const data=await response.json();if(data.message)reason=data.message;}catch{}throw new Error(reason);}const data=await response.json();output.textContent=data.items.length?data.items.map((x,i)=>`${i+1}. [${x.type}] ${x.topic}：${x.content}\n来源片段：${x.evidenceIndices.map(n=>n+1).join('、')}${x.needsReview?' · 待确认':''}`).join('\n\n'):'本段没有提取到候选信息。';}catch(e){output.textContent=e.message||'请求结果不确定，再次点击将使用同一请求标识查询。';}finally{extract.disabled=false;}};detail.append(extract,output);area.append(detail);}if(!chunks.length)area.textContent='暂无识别正文。';}catch(e){area.textContent=e.message||'分段预览失败。';}finally{b.disabled=false;}};
+  const extractionTypes = {FACT:'事实',PROPOSAL:'建议',OBJECTION:'异议',DECISION:'决议',ACTION:'行动项',QUESTION:'问题',UNCERTAIN:'待确认'};
+  function updateChunkProgress(){
+    const completed=chunkItems.filter(item=>item.done).length;
+    el('chunk-summary').disabled=!chunkItems.length || completed!==chunkItems.length;
+    el('chunk-extract-progress').textContent=chunkItems.length ? `已完成 ${completed} / ${chunkItems.length} 段；按原顺序依次处理。` : '';
+  }
+  function showChunkResult(item, data){
+    item.output.textContent=data.items.length?data.items.map((x,i)=>`${i+1}. [${extractionTypes[x.type]||x.type}] ${x.topic}：${x.content}\n来源片段：${x.evidenceIndices.map(n=>n+1).join('、')}${x.needsReview?' · 待确认':''}`).join('\n\n'):'本段没有提取到候选信息。';
+    item.done=true;item.title.textContent=item.label+' · 已完成';item.button.textContent='已完成';item.button.disabled=true;
+  }
+  async function extractChunk(item, taskId){
+    if(item.done)return true;
+    if(chunkInFlight)return false;
+    if(!globalThis.crypto?.randomUUID){item.output.textContent='当前浏览器无法生成请求标识。';return false;}
+    if(reviewDirty || selectedTask?.id!==taskId){item.output.textContent='说话人校对或当前录音已变化，请保存后重新加载分段。';return false;}
+    const chunk=item.chunk, fingerprint=`${taskId}:${chunk.chunkIndex}:${chunk.speakerReviewVersion}`;
+    let key=pendingExtractions.get(fingerprint);
+    if(!key){key=crypto.randomUUID();pendingExtractions.set(fingerprint,key);}
+    chunkInFlight=true;item.title.textContent=item.label+' · 提取中';item.button.disabled=true;el('chunk-preview-load').disabled=true;el('chunk-extract-all').disabled=true;item.output.textContent='正在提取候选信息…';
+    try{
+      const response=await api(url(`/${encodeURIComponent(taskId)}/chunks/${chunk.chunkIndex}/extract`),{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':key},body:JSON.stringify({speakerReviewVersion:chunk.speakerReviewVersion})});
+      if(response.status===425)throw new Error('请求仍在处理中，请稍后重试。');
+      if(!response.ok){
+        if([400,404,409,502,503].includes(response.status))pendingExtractions.delete(fingerprint);
+        let reason='提取失败，请检查配置或重新加载分段。';
+        try{const data=await response.json();if(data.message)reason=data.message;}catch{}
+        throw new Error(reason);
+      }
+      const data=await response.json();
+      if(selectedTask?.id!==taskId || !document.contains(item.output))return false;
+      showChunkResult(item,data);updateChunkProgress();return true;
+    }catch(e){item.title.textContent=item.label+' · 待处理';item.output.textContent=e.message||'请求结果不确定，再次点击将使用同一请求标识查询。';return false;}
+    finally{chunkInFlight=false;item.button.disabled=item.done || chunkRunning;if(!chunkRunning){el('chunk-preview-load').disabled=false;el('chunk-extract-all').disabled=chunkItems.every(entry=>entry.done);}}
+  }
+  el('chunk-summary').onclick=async()=>{
+    if(!selectedTask || reviewDirty || !chunkItems.length || chunkItems.some(item=>!item.done))return;
+    if(!globalThis.crypto?.randomUUID){el('chunk-summary-status').textContent='当前环境无法生成请求标识。';return;}
+    const taskId=selectedTask.id, button=el('chunk-summary');
+    if(!pendingSummary || pendingSummary.taskId!==taskId)pendingSummary={taskId,key:crypto.randomUUID()};
+    button.disabled=true;el('chunk-summary-status').textContent='正在汇总，请稍候…';
+    try{
+      const response=await api(url(`/${encodeURIComponent(taskId)}/chunks/summary`),{method:'POST',headers:{'Idempotency-Key':pendingSummary.key}});
+      if(response.status===425)throw new Error('汇总仍在处理中，请稍后重试。');
+      if(!response.ok){
+        if([400,404,409,502,503].includes(response.status))pendingSummary=null;
+        let reason='汇总失败，请检查配置后重试。';
+        try{const data=await response.json();if(data.message)reason=data.message;}catch{}
+        throw new Error(reason);
+      }
+      const result=await response.json();
+      if(selectedTask?.id!==taskId || !document.contains(box))return;
+      el('chunk-summary-content').value=result.content;
+      el('chunk-summary-status').textContent='汇总完成，请对照来源人工核对。';
+    }catch(e){el('chunk-summary-status').textContent=e.message||'结果尚不确定，重试将使用原请求标识。';}
+    finally{if(selectedTask?.id===taskId)button.disabled=false;}
+  };
+  el('chunk-extract-all').onclick=async()=>{
+    if(chunkRunning || chunkInFlight || !selectedTask || !chunkItems.length)return;
+    const taskId=selectedTask.id,items=chunkItems;chunkRunning=true;
+    el('chunk-extract-all').disabled=true;el('chunk-preview-load').disabled=true;
+    items.forEach(item=>item.button.disabled=true);
+    try{
+      for(const item of items){
+        if(selectedTask?.id!==taskId || chunkItems!==items || reviewDirty)break;
+        if(!await extractChunk(item,taskId)){
+          el('chunk-extract-progress').textContent=`第 ${item.chunk.chunkIndex} 段未完成，已暂停；处理后可再次点击继续。`;
+          break;
+        }
+      }
+    }finally{
+      chunkRunning=false;
+      if(chunkItems===items && document.contains(box)){
+        el('chunk-preview-load').disabled=false;
+        el('chunk-extract-all').disabled=items.every(item=>item.done);
+        items.forEach(item=>item.button.disabled=item.done);
+      }
+    }
+  };
+  el('chunk-preview-load').onclick=async()=>{
+    if(!selectedTask || chunkRunning || chunkInFlight)return;
+    if(reviewDirty){message.textContent='请先保存说话人校对后再预览分段。';return;}
+    const taskId=selectedTask.id,area=el('chunk-preview-list'),button=el('chunk-preview-load');
+    button.disabled=true;el('chunk-extract-all').disabled=true;area.textContent='正在加载…';chunkItems=[];pendingSummary=null;el('chunk-summary-content').value='';el('chunk-summary-status').textContent='';updateChunkProgress();
+    try{
+      const response=await api(url(`/${encodeURIComponent(taskId)}/chunks/preview`));
+      if(!response.ok)throw new Error('分段预览失败，请稍后重试。');
+      const chunks=await response.json();
+      if(selectedTask?.id!==taskId || !document.contains(box))return;
+      area.replaceChildren();
+      for(const chunk of chunks){
+        const detail=document.createElement('details'),title=document.createElement('summary'),pre=document.createElement('pre');
+        detail.className='chunk-card';title.textContent=`第 ${chunk.chunkIndex} 段 · 正文 ${chunk.textChars} 字符 · 参考上文 ${chunk.contextBefore.length} 条`;
+        pre.style.whiteSpace='pre-wrap';pre.style.overflowWrap='anywhere';
+        const format=u=>`[片段 ${u.segmentIndex+1}] ${u.speaker}：${u.text}`;
+        pre.textContent='【参考上文】\n'+chunk.contextBefore.map(format).join('\n')+'\n\n【当前正文】\n'+chunk.utterances.map(format).join('\n');
+        const extract=document.createElement('button'),output=document.createElement('pre');
+        extract.type='button';extract.className='button outline';extract.textContent='AI 提取本段';
+        output.className='chunk-result';output.style.whiteSpace='pre-wrap';output.style.overflowWrap='anywhere';
+        const item={chunk,button:extract,output,title,label:title.textContent,done:false};
+        title.textContent=item.label+' · 待提取';
+        extract.onclick=()=>extractChunk(item,taskId);
+        chunkItems.push(item);detail.append(title,pre,extract,output);area.append(detail);
+      }
+      if(!chunks.length)area.textContent='暂无识别正文。';
+      if(chunks.length){
+        const restored=await api(url(`/${encodeURIComponent(taskId)}/chunks/extractions`));
+        if(selectedTask?.id!==taskId || !document.contains(box))return;
+        if(restored.ok){
+          const saved=await restored.json();
+          for(const data of saved){const item=chunkItems.find(entry=>entry.chunk.chunkIndex===data.chunkIndex);if(item)showChunkResult(item,data);}
+        }else{
+          message.textContent='未能恢复已完成的分段结果，请检查数据库迁移并重新加载。';
+          return;
+        }
+      }
+      el('chunk-extract-all').disabled=!chunks.length || chunkItems.every(item=>item.done);updateChunkProgress();
+    }catch(e){area.textContent=e.message||'分段预览失败。';}
+    finally{button.disabled=false;}
+  };
   el('speech-import').onclick=()=>{if(!selectedTask?.segments?.length)return;if(editor.value&&!confirm('导入会替换当前文字稿编辑区的内容，请先确认已保存。继续吗？'))return;editor.value=selectedTask.segments.map((s,i)=>`${displaySpeaker(s,i)}：${s.text}`).join('\n');delete editor.dataset.aiDraftId;message.textContent='已导入编辑区，请核对并点击“保存文字稿”。';};
   await loadRecordings(0);
   function scheduleRefresh(){refreshTimer=setTimeout(async()=>{if(!document.contains(box))return;if(!historyOpen && busy.size===0)await loadRecordings(page);scheduleRefresh();},15000);}

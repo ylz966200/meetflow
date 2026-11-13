@@ -177,6 +177,12 @@ public class TranscriptionController {
         return transcriptions.previewChunks(id, taskId, meetings.userId(principal.getName()));
     }
 
+    /** 读取当前用户在当前分段快照下已完成的提取结果，不产生模型调用。 */
+    @GetMapping("/{taskId}/chunks/extractions")
+    public List<ChunkExtractionView> completedExtractions(@PathVariable String id, @PathVariable String taskId, Principal principal) {
+        return chunkExtractions.completed(id, taskId, meetings.userId(principal.getName()));
+    }
+
     /**
      * 提取一个分段的候选信息；同一请求标识重试不会重复发起模型调用。
      */

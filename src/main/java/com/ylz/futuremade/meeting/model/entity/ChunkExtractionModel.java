@@ -9,6 +9,7 @@ public class ChunkExtractionModel {
     /** 所属会议 ID。 */ private String meetingId;
     /** 来源转写任务 ID。 */ private String taskId;
     /** 技术分段序号，从 1 开始。 */ private Integer chunkIndex;
+    /** 提取时分段快照的 SHA-256 摘要，用于判断分段内容是否变化。 */ private String chunkFingerprint;
     /** 所用说话人校对版本。 */ private Integer speakerReviewVersion;
     /** 发起人用户 ID。 */ private Long actorId;
     /** 处理状态码。 */ private Integer status;

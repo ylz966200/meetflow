@@ -16,6 +16,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.UUID;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HexFormat;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import com.ylz.futuremade.meeting.model.dto.TranscriptChunkView;
 
 /**
  * 单段 AI 候选信息提取；请求幂等并记录来源与模型调用。
@@ -61,6 +68,7 @@ public class ChunkExtractionService {
         record.setChunkIndex(chunkIndex);
         record.setSpeakerReviewVersion(input.getSpeakerReviewVersion());
         record.setActorId(actor);
+        record.setChunkFingerprint(fingerprint(context.getChunk()));
         record.setStatus(BusinessStatus.RUNNING.code());
         try {
             extractions.insert(record);
@@ -84,6 +92,33 @@ public class ChunkExtractionService {
             extractions.finish(key, BusinessStatus.FAILED.code(), callId, null);
             if (ex instanceof ResponseStatusException statusException) throw statusException;
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "分段提取失败，请检查模型及提示词配置后重试");
+        }
+    }
+
+    /** 仅恢复当前用户在相同分段快照下已成功的结果，不触发模型调用。 */
+    public List<ChunkExtractionView> completed(String meetingId, String taskId, long actor) {
+        var chunks = transcriptions.previewChunks(meetingId, taskId, actor);
+        var fingerprints = new HashMap<Integer, String>();
+        for (var chunk : chunks) fingerprints.put(chunk.getChunkIndex(), fingerprint(chunk));
+        var restored = new HashMap<Integer, ChunkExtractionView>();
+        for (var record : extractions.completed(meetingId, taskId, actor, BusinessStatus.SUCCEEDED.code())) {
+            if (restored.containsKey(record.getChunkIndex()) || !record.getChunkFingerprint().equals(fingerprints.get(record.getChunkIndex()))) continue;
+            try {
+                restored.put(record.getChunkIndex(), json.readValue(record.getResultJson(), ChunkExtractionView.class));
+            } catch (JsonProcessingException ex) {
+                throw new IllegalStateException("已保存的提取结果无法读取", ex);
+            }
+        }
+        var result = new ArrayList<ChunkExtractionView>();
+        for (var chunk : chunks) if (restored.containsKey(chunk.getChunkIndex())) result.add(restored.get(chunk.getChunkIndex()));
+        return result;
+    }
+
+    private String fingerprint(TranscriptChunkView chunk) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.writeValueAsBytes(chunk)));
+        } catch (JsonProcessingException | NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("无法计算分段快照摘要", ex);
         }
     }
 

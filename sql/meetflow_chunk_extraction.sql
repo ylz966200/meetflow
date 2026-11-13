@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS mf_chunk_extraction (
  meeting_id CHAR(36) NOT NULL COMMENT '所属会议 ID',
  task_id CHAR(36) NOT NULL COMMENT '来源转写任务 ID',
  chunk_index INT NOT NULL COMMENT '技术分段序号，从 1 开始',
+ chunk_fingerprint CHAR(64) NULL COMMENT '分段快照 SHA-256 摘要，历史记录可为空',
  speaker_review_version INT NOT NULL COMMENT '提取时的说话人校对版本',
  actor_id BIGINT NOT NULL COMMENT '发起人用户 ID',
  status SMALLINT NOT NULL COMMENT '处理状态，参见 BusinessStatus 枚举',

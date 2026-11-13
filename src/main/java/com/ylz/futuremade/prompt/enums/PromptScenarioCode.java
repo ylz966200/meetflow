@@ -9,7 +9,9 @@ public enum PromptScenarioCode {
     /** 整理多个录音转写结果。 */
     TRANSCRIPT_ORGANIZE("TRANSCRIPT_ORGANIZE"),
     /** 按分段提取会议内容。 */
-    TRANSCRIPT_EXTRACTION("TRANSCRIPT_EXTRACTION");
+    TRANSCRIPT_EXTRACTION("TRANSCRIPT_EXTRACTION"),
+    /** 汇总各分段提取的候选信息。 */
+    TRANSCRIPT_SUMMARY("TRANSCRIPT_SUMMARY");
 
     /** 已持久化的场景编码。 */
     private final String code;

@@ -11,6 +11,7 @@ spring:
       chat:
         options:
           model: deepseek-chat
+          max-tokens: 16384
   config:
     import: file:./config/futuremade-datasource.properties
 
