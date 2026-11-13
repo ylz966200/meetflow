@@ -1,0 +1,46 @@
+spring:
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 101MB
+  application:
+    name: futuremade
+  ai:
+    deepseek:
+      api-key: ${SPRING_AI_DEEPSEEK_API_KEY}
+      chat:
+        options:
+          model: deepseek-chat
+  config:
+    import: file:./config/futuremade-datasource.properties
+
+meetflow:
+  transcript-context:
+    # 以下限制分别适用于单个分段的工具调用及单次返回正文。
+    max-calls: 3
+    max-utterances: 10
+    max-chars: 3000
+  transcript-chunk:
+    # 正文按 Java UTF-16 单元计数；不包含提示词和上文。
+    target-chars: 6000
+    max-chars: 8000
+    # 从上一分段末尾取完整发言作为上文，超过预算时停止。
+    context-utterances: 5
+    context-chars: 500
+  tos:
+    endpoint: ${VOLC_TOS_ENDPOINT:}
+    region: ${VOLC_TOS_REGION:}
+    bucket: ${VOLC_TOS_BUCKET:}
+    access-key: ${VOLC_TOS_ACCESS_KEY:}
+    secret-key: ${VOLC_TOS_SECRET_KEY:}
+    signed-url-seconds: ${VOLC_TOS_SIGNED_URL_SECONDS:14400}
+  speech:
+    api-key: ${VOLC_SPEECH_API_KEY:}
+    resource-id: ${VOLC_SPEECH_RESOURCE_ID:volc.bigasr.auc}
+    # 调用方标识，并非会议发言人的姓名或编号。
+    uid: ${VOLC_SPEECH_UID:meetflow}
+    # 说话人分离模型版本；变更前确认火山服务和资源支持。
+    speaker-version: ${VOLC_SPEECH_SPEAKER_VERSION:300}
+  jwt:
+    secret-base64: ${MEETFLOW_JWT_SECRET_BASE64:}
+

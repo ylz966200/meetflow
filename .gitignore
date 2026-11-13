@@ -1,0 +1,51 @@
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+/config/futuremade-datasource.properties
+
+# 本地凭据和运行数据，不纳入版本管理
+.env
+.env.*
+!.env.example
+/config/*-local.yml
+/config/*-local.yaml
+/config/*-local.properties
+/uploads/
+/backups/
+
+# 本地录音和任务运行数据
+*.mp3
+*.wav
+*.ogg
+/job-monitor/data/

@@ -1,0 +1,229 @@
+{
+  "ai_tool": {
+    "comment": "AI 工具配置表",
+    "columns": {
+      "tool_name": "工具名称，也是工具唯一标识",
+      "enabled": "是否启用工具"
+    }
+  },
+  "ai_tool_user_permission": {
+    "comment": "AI 工具用户授权表",
+    "columns": {
+      "username": "获授权用户名",
+      "tool_name": "获授权工具名称"
+    }
+  },
+  "weather_tool_config": {
+    "comment": "天气工具配置表",
+    "columns": {
+      "config_key": "配置项名称",
+      "config_value": "配置项的值"
+    }
+  },
+  "mf_user": {
+    "comment": "系统用户表",
+    "columns": {
+      "id": "用户主键 ID",
+      "username": "登录用户名，区分大小写",
+      "password_hash": "BCrypt 密码哈希，禁止明文存储",
+      "enabled": "账号是否启用",
+      "created_at": "账号创建时间",
+      "updated_at": "账号最后更新时间"
+    }
+  },
+  "mf_role": {
+    "comment": "系统角色表",
+    "columns": {
+      "id": "角色主键 ID",
+      "code": "系统角色编码，区分大小写",
+      "name": "角色显示名称",
+      "enabled": "角色是否启用"
+    }
+  },
+  "mf_user_role": {
+    "comment": "系统用户角色关联表",
+    "columns": {
+      "user_id": "用户 ID",
+      "role_id": "系统角色 ID"
+    }
+  },
+  "mf_meeting": {
+    "comment": "会议基本信息表",
+    "columns": {
+      "id": "会议 ID，UUID 字符串",
+      "owner_id": "会议组织者用户 ID",
+      "title": "会议主题",
+      "meeting_time": "会议时间，可为空",
+      "created_at": "会议创建时间"
+    }
+  },
+  "mf_meeting_member": {
+    "comment": "会议成员表",
+    "columns": {
+      "meeting_id": "会议 ID",
+      "user_id": "会议成员用户 ID",
+      "member_role": "会议成员角色，编辑者或查看者"
+    }
+  },
+  "mf_meeting_member_audit": {
+    "comment": "会议成员变更审计表",
+    "columns": {
+      "id": "审计记录 ID",
+      "meeting_id": "会议 ID",
+      "actor_id": "操作人用户 ID",
+      "target_id": "被操作的成员用户 ID",
+      "action": "成员变更操作类型",
+      "old_role": "变更前成员角色，可为空",
+      "new_role": "变更后成员角色，可为空",
+      "created_at": "操作时间"
+    }
+  },
+  "mf_transcript_version": {
+    "comment": "会议文字稿版本表",
+    "columns": {
+      "meeting_id": "会议 ID",
+      "version": "文字稿版本号",
+      "content": "会议文字稿正文，属于敏感数据",
+      "created_by": "文字稿版本创建人用户 ID",
+      "created_at": "文字稿版本创建时间"
+    }
+  },
+  "mf_outline_version": {
+    "comment": "会议大纲版本表",
+    "columns": {
+      "meeting_id": "会议 ID",
+      "version": "大纲版本号",
+      "transcript_version": "关联的文字稿版本号",
+      "status": "业务状态码，参见 BusinessStatus 枚举",
+      "items_json": "按顺序保存大纲条目的 JSON",
+      "created_by": "大纲版本创建人用户 ID",
+      "created_at": "大纲版本创建时间"
+    }
+  },
+  "mf_prompt_scenario": {
+    "comment": "提示词业务场景表",
+    "columns": {
+      "code": "业务场景编码",
+      "name": "场景名称",
+      "active_version_id": "当前生效的提示词版本 ID"
+    }
+  },
+  "mf_prompt_version": {
+    "comment": "提示词不可变版本表",
+    "columns": {
+      "id": "提示词版本主键 ID",
+      "scenario": "业务场景编码",
+      "version": "场景内递增的版本号",
+      "content": "系统提示词内容",
+      "change_note": "版本修改原因",
+      "created_by": "创建人用户 ID，系统初始化时为空",
+      "created_at": "版本创建时间"
+    }
+  },
+  "mf_prompt_release_audit": {
+    "comment": "提示词发布回滚审计表",
+    "columns": {
+      "id": "审计记录主键 ID",
+      "scenario": "业务场景编码",
+      "old_version_id": "发布前生效版本 ID，可为空",
+      "new_version_id": "发布后生效版本 ID",
+      "actor_id": "操作人用户 ID",
+      "reason": "发布或回滚原因",
+      "created_at": "操作时间"
+    }
+  },
+  "mf_ai_call": {
+    "comment": "AI 模型调用记录表",
+    "columns": {
+      "id": "调用记录主键 ID",
+      "scenario": "业务场景编码",
+      "meeting_id": "关联会议 ID",
+      "transcript_version": "关联文字稿版本号",
+      "actor_id": "发起人用户 ID",
+      "status": "业务状态码，参见 BusinessStatus 枚举",
+      "duration_ms": "模型调用耗时，单位毫秒",
+      "error_category": "失败分类，不包含模型返回内容",
+      "created_at": "调用开始时间",
+      "request_key": "关联生成请求标识，历史记录可为空",
+      "outline_version": "纪要生成所依据的大纲版本号",
+      "provider": "模型供应商",
+      "model_name": "供应商返回的模型名称",
+      "provider_request_id": "供应商返回的请求 ID",
+      "input_tokens": "供应商返回的输入 Token 数",
+      "output_tokens": "供应商返回的输出 Token 数",
+      "cached_tokens": "供应商返回的缓存命中 Token 数",
+      "prompt_version_id": "调用时使用的提示词版本主键，关联 mf_prompt_version.id"
+    }
+  },
+  "mf_minutes_version": {
+    "comment": "会议纪要版本表",
+    "columns": {
+      "meeting_id": "所属会议 ID",
+      "version": "会议内递增的纪要版本号",
+      "outline_version": "生成纪要使用的已确认大纲版本号",
+      "transcript_version": "生成纪要使用的文字稿版本号",
+      "status": "业务状态码，参见 BusinessStatus 枚举",
+      "content": "会议纪要正文，属于敏感会议数据",
+      "created_by": "版本创建人的用户 ID",
+      "created_at": "纪要版本创建时间"
+    }
+  },
+  "mf_generation_request": {
+    "comment": "AI 生成请求去重记录表",
+    "columns": {
+      "request_key": "客户端生成的请求 UUID",
+      "scenario": "生成场景编码",
+      "meeting_id": "关联会议 ID",
+      "actor_id": "发起人的用户 ID",
+      "source_version": "来源文字稿或大纲版本号",
+      "expected_version": "请求时的目标最新版本号",
+      "status": "业务状态码，参见 BusinessStatus 枚举",
+      "result_version": "成功保存的目标版本号",
+      "created_at": "请求创建时间",
+      "updated_at": "状态最后更新时间"
+    }
+  },
+  "mf_ai_call_content": {
+    "comment": "AI 调用输入输出内容表",
+    "columns": {
+      "call_id": "关联的 AI 调用记录 ID",
+      "system_content": "发送给模型的系统提示词原文",
+      "user_content": "发送给模型的用户消息原文，可能包含会议敏感信息",
+      "output_content": "模型返回的原始文本，未返回时为空",
+      "tool_trace": "上下文工具调用和返回结果 JSON，属于敏感会议内容",
+      "created_at": "输入内容记录时间"
+    }
+  },
+  "mf_transcription_task": {
+    "comment": "会议录音转写任务表",
+    "columns": {
+      "id": "转写任务 ID，也是火山请求 ID",
+      "meeting_id": "所属会议 ID",
+      "created_by": "提交人用户 ID",
+      "status": "业务状态码，参见 BusinessStatus 枚举",
+      "segments_json": "识别片段 JSON，属于敏感会议内容",
+      "created_at": "任务创建时间",
+      "updated_at": "任务更新时间",
+      "next_poll_at": "下一次允许自动查询的时间",
+      "lease_token": "轮询任务租约标识",
+      "lease_until": "轮询任务租约截止时间",
+      "poll_count": "自动查询次数"
+    }
+  },
+  "mf_recording": {
+    "comment": "会议录音文件表",
+    "columns": {
+      "id": "录音文件唯一标识",
+      "meeting_id": "所属会议 ID",
+      "object_key": "TOS 对象 Key，不包含签名链接",
+      "original_name": "用户上传的原始文件名",
+      "file_size": "文件大小，单位字节",
+      "format": "音频容器格式",
+      "status": "业务状态码，参见 BusinessStatus 枚举",
+      "transcription_task_id": "关联的识别任务 ID",
+      "created_by": "上传人用户 ID",
+      "created_at": "录音记录创建时间",
+      "updated_at": "录音记录更新时间"
+    }
+  }
+}

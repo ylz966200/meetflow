@@ -1,0 +1,9 @@
+spring:
+  application:
+    name: futuremade
+  ai:
+    deepseek:
+      api-key: ${SPRING_AI_DEEPSEEK_API_KEY:test-placeholder}
+      chat:
+        options:
+          model: deepseek-chat
