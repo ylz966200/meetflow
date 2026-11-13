@@ -1,8 +1,7 @@
 package com.ylz.futuremade.meeting.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.deepseek.DeepSeekChatModel;
+import com.ylz.futuremade.assistant.service.AiModelGateway;
 import org.springframework.stereotype.Component;
 import com.ylz.futuremade.prompt.service.PromptService;
 
@@ -14,11 +13,11 @@ import java.util.Map;
  */
 @Component
 public class MinutesGenerator {
-    private final DeepSeekChatModel model;
+    private final AiModelGateway model;
     private final ObjectMapper json;
     private final PromptService prompts;
 
-    public MinutesGenerator(DeepSeekChatModel model, ObjectMapper json, PromptService prompts) {
+    public MinutesGenerator(AiModelGateway model, ObjectMapper json, PromptService prompts) {
         this.model = model;
         this.json = json;
         this.prompts = prompts;
@@ -28,7 +27,7 @@ public class MinutesGenerator {
         try {
             String data = json.writeValueAsString(Map.of("confirmedOutline", outline, "transcript", transcript));
             prompts.recordInput(callId, systemPrompt, data);
-            var modelResponse = ChatClient.builder(model).build().prompt().system(systemPrompt).user(data).call().chatResponse();
+            var modelResponse = model.call(systemPrompt, data);
             String response = modelResponse.getResult().getOutput().getText();
             prompts.recordOutput(callId, response);
             prompts.recordMetadata(callId, modelResponse);

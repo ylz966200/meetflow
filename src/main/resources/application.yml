@@ -15,6 +15,11 @@ spring:
     import: file:./config/futuremade-datasource.properties
 
 meetflow:
+  ai:
+    # 已注册的 Spring ChatModel Bean 名称。
+    default-model: ${MEETFLOW_AI_DEFAULT_MODEL:deepSeekChatModel}
+    platforms:
+      deepseek: deepSeekChatModel
   transcript-context:
     # 以下限制分别适用于单个分段的工具调用及单次返回正文。
     max-calls: 3

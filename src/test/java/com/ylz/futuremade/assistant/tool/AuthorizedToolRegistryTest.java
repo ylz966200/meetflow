@@ -32,6 +32,17 @@ class AuthorizedToolRegistryTest {
         assertEquals(0, registry.forUser("bob").length);
         assertEquals(0, registry.forUser(null).length);
     }
+    @Test
+    void scopedToolsRespectPermissions() {
+        var mapper = mock(ToolPermissionMapper.class);
+        var registry = new AuthorizedToolRegistry(mapper, mock(ApplicationContext.class));
+        var tool = new com.ylz.futuremade.meeting.transcript.MeetingContextTools(
+                java.util.List.of(), 0, new com.ylz.futuremade.meeting.transcript.MeetingContextProperties());
+        when(mapper.findEnabledToolNames("alice")).thenReturn(new HashSet<>(Set.of("search_meeting_context")));
+        when(mapper.findEnabledToolNames("bob")).thenReturn(new HashSet<>());
+        assertEquals("search_meeting_context", registry.forUserScoped("alice", tool)[0].getToolDefinition().name());
+        assertEquals(0, registry.forUserScoped("bob", tool).length);
+    }
 }
 
 

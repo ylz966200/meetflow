@@ -1,5 +1,7 @@
 package com.ylz.futuremade.meeting.controller;
 
+import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
+
 import com.ylz.futuremade.common.enums.BusinessStatus;
 
 import com.ylz.futuremade.meeting.service.MeetingService;
@@ -63,11 +65,11 @@ public class OutlineController {
         if (transcript.content().length() > 12000)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前仅支持不超过12000字符的文字稿");
         String key = requestKey == null ? java.util.UUID.randomUUID().toString() : requestKey;
-        Integer replay = requests.begin(key, "MEETING_OUTLINE", id, actor, input.getTranscriptVersion(), input.getExpectedVersion());
+        Integer replay = requests.begin(key, PromptScenarioCode.MEETING_OUTLINE.code(), id, actor, input.getTranscriptVersion(), input.getExpectedVersion());
         if (replay != null) return outlines.history(id, actor, replay);
         try {
             outlines.checkGeneration(id, actor, input.getTranscriptVersion(), input.getExpectedVersion());
-            var prompt = prompts.active(PromptService.OUTLINE);
+            var prompt = prompts.active(PromptScenarioCode.MEETING_OUTLINE.code());
             long callId = prompts.startCall(prompt, id, input.getTranscriptVersion(), actor, key, null);
             long start = System.nanoTime();
             java.util.List<String> items;

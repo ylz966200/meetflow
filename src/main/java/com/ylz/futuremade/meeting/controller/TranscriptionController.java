@@ -183,7 +183,7 @@ public class TranscriptionController {
     @PostMapping("/{taskId}/chunks/{chunkIndex}/extract")
     public ChunkExtractionView extractChunk(@PathVariable String id, @PathVariable String taskId, @PathVariable int chunkIndex,
                                             @RequestBody ChunkExtractionRequest request, @RequestHeader("Idempotency-Key") String key, Principal principal) {
-        return chunkExtractions.extract(id, taskId, chunkIndex, meetings.userId(principal.getName()), key, request);
+        return chunkExtractions.extract(id, taskId, chunkIndex, meetings.userId(principal.getName()), principal.getName(), key, request);
     }
 
     /**

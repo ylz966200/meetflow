@@ -1,5 +1,7 @@
 package com.ylz.futuremade.meeting.controller;
 
+import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
+
 import com.ylz.futuremade.common.enums.BusinessStatus;
 
 import com.ylz.futuremade.meeting.model.dto.GenerateMinutesRequest;
@@ -61,14 +63,14 @@ public class MinutesController {
         long actor = meetings.userId(principal.getName());
         meetings.requireOutlineEditor(id, actor, false);
         String key = requestKey == null ? java.util.UUID.randomUUID().toString() : requestKey;
-        Integer replay = requests.begin(key, "MEETING_MINUTES", id, actor, input.getOutlineVersion(), input.getExpectedVersion());
+        Integer replay = requests.begin(key, PromptScenarioCode.MEETING_MINUTES.code(), id, actor, input.getOutlineVersion(), input.getExpectedVersion());
         if (replay != null) return minutes.get(id, actor, replay);
         try {
             var outline = minutes.checkGeneration(id, actor, input.getOutlineVersion(), input.getExpectedVersion(), outlines);
             var transcript = meetings.getTranscript(id, actor, outline.transcriptVersion());
             if (transcript.content().length() > 12000)
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前仅支持不超过12000字符的文字稿");
-            var prompt = prompts.active("MEETING_MINUTES");
+            var prompt = prompts.active(PromptScenarioCode.MEETING_MINUTES.code());
             long callId = prompts.startCall(prompt, id, outline.transcriptVersion(), actor, key, input.getOutlineVersion()), start = System.nanoTime();
             String content;
             try {

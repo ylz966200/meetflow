@@ -24,7 +24,6 @@ import org.springframework.ai.deepseek.api.DeepSeekApi;
 
 @Service
 public class PromptService {
-    public static final String OUTLINE = "MEETING_OUTLINE";
     private final PromptMapper mapper;
 
     public PromptService(PromptMapper mapper) {

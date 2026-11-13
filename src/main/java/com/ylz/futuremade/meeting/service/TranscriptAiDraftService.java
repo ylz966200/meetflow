@@ -1,5 +1,7 @@
 package com.ylz.futuremade.meeting.service;
 
+import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.common.enums.BusinessStatus;
@@ -28,7 +30,6 @@ public class TranscriptAiDraftService {
      * 单次 AI 输入长度上限，避免长会议超出当前处理能力。
      */
     private static final int MAX_INPUT_CHARS = 12000;
-    private static final String SCENARIO = "TRANSCRIPT_ORGANIZE";
     private final MeetingService access;
     private final MeetingMapper meetings;
     private final TranscriptionService transcriptions;
@@ -67,7 +68,7 @@ public class TranscriptAiDraftService {
             var assembled = transcriptions.assemble(meetingId, actor, request);
             if (assembled.getContent().length() > MAX_INPUT_CHARS)
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "本次整理内容为 " + assembled.getContent().length() + " 个字符，超过当前上限 " + MAX_INPUT_CHARS + "；请选择较短的转写结果");
-            var prompt = prompts.active(SCENARIO);
+            var prompt = prompts.active(PromptScenarioCode.TRANSCRIPT_ORGANIZE.code());
             var draft = new TranscriptAiDraftModel();
             draft.setId(key);
             draft.setMeetingId(meetingId);

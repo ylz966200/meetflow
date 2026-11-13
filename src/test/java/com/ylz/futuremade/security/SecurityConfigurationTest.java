@@ -214,12 +214,12 @@ class SecurityConfigurationTest {
         jdbc.update("INSERT INTO mf_transcription_task(id,meeting_id,created_by,status,segments_json) VALUES ('task-a','meeting-a',1,4,?)",segments);
         var result=new com.ylz.futuremade.meeting.model.dto.ChunkExtractionView();
         result.setTaskId("task-a");result.setChunkIndex(1);result.setSpeakerReviewVersion(0);result.setItems(java.util.List.of());
-        when(chunkExtractionAgent.extract(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong())).thenReturn(result);
+        when(chunkExtractionAgent.extract(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong(),org.mockito.ArgumentMatchers.anyString())).thenReturn(result);
         String key="33333333-3333-4333-8333-333333333333",path="/api/meetings/meeting-a/transcriptions/task-a/chunks/1/extract";
         String body="{\"speakerReviewVersion\":0}";
         mvc.perform(post(path).header("Authorization","Bearer "+token).header("Idempotency-Key",key).contentType("application/json").content(body)).andExpect(status().isOk()).andExpect(jsonPath("$.taskId").value("task-a"));
         mvc.perform(post(path).header("Authorization","Bearer "+token).header("Idempotency-Key",key).contentType("application/json").content(body)).andExpect(status().isOk());
-        org.mockito.Mockito.verify(chunkExtractionAgent,org.mockito.Mockito.times(1)).extract(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong());
+        org.mockito.Mockito.verify(chunkExtractionAgent,org.mockito.Mockito.times(1)).extract(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong(),org.mockito.ArgumentMatchers.anyString());
         mvc.perform(post(path).header("Authorization","Bearer "+token).header("Idempotency-Key","44444444-4444-4444-8444-444444444444").contentType("application/json").content("{\"speakerReviewVersion\":1}")).andExpect(status().isConflict());
         mvc.perform(post("/api/meetings/meeting-b/transcriptions/task-a/chunks/1/extract").header("Authorization","Bearer "+token).header("Idempotency-Key","55555555-5555-4555-8555-555555555555").contentType("application/json").content(body)).andExpect(status().isNotFound());
     }

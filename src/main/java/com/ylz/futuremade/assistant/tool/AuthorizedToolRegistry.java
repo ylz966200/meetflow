@@ -52,6 +52,17 @@ public class AuthorizedToolRegistry {
         }
     }
 
+    /** 按用户权限筛选请求范围内的工具。 */
+    public ToolCallback[] forUserScoped(String username, Object tool) {
+        if (username == null || username.isBlank()) return new ToolCallback[0];
+        try {
+            var allowed = permissionMapper.findEnabledToolNames(username.trim());
+            return Arrays.stream(ToolCallbacks.from(tool)).filter(c -> allowed.contains(c.getToolDefinition().name())).toArray(ToolCallback[]::new);
+        } catch (DataAccessException ex) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "无法加载工具权限", ex);
+        }
+    }
+
     private boolean hasToolMethod(Class<?> type) {
         return ReflectionUtils.getUniqueDeclaredMethods(type, method -> method.isAnnotationPresent(Tool.class)).length > 0;
     }

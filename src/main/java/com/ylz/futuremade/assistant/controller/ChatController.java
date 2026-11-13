@@ -8,7 +8,8 @@ import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
-import org.springframework.ai.deepseek.DeepSeekChatModel;
+import com.ylz.futuremade.assistant.service.AiModelGateway;
+import com.ylz.futuremade.assistant.service.AiModelProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -16,8 +17,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.security.Principal;
 
 /**
@@ -27,19 +26,27 @@ import java.security.Principal;
 @RequestMapping("/api/chat")
 public class ChatController {
     private final AuthorizedToolRegistry toolRegistry;
-    private Map<String, ChatModel> chatModelMap = new HashMap<>();
+    private final AiModelGateway models;
+    private final AiModelProperties properties;
     @Autowired
     private ChatMemory chatMemory;
 
-    public ChatController(DeepSeekChatModel deepSeekChatModel, AuthorizedToolRegistry toolRegistry) {
+    public ChatController(AiModelGateway models, AiModelProperties properties, AuthorizedToolRegistry toolRegistry) {
         this.toolRegistry = toolRegistry;
-        chatModelMap.put("deepseek", deepSeekChatModel);
+        this.models = models;
+        this.properties = properties;
     }
 
     /** 发起流式 AI 对话，并使用当前登录用户的对话记忆和工具权限。 */
     @PostMapping
     public Flux<String> chat(@RequestBody ChatModelDTO request, Principal principal) {
-        ChatModel chatModel = chatModelMap.getOrDefault(request.getPlatform(), null);
+        String modelName = properties.getPlatforms().get(request.getPlatform());
+        ChatModel chatModel;
+        try {
+            chatModel = modelName == null ? null : models.model(modelName);
+        } catch (IllegalArgumentException ex) {
+            chatModel = null;
+        }
         if (chatModel == null) {
             throw new org.springframework.web.server.ResponseStatusException(
                     org.springframework.http.HttpStatus.BAD_REQUEST, "Unsupported platform");

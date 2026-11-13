@@ -1,5 +1,7 @@
 package com.ylz.futuremade.meeting.service;
 
+import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.common.enums.BusinessStatus;
@@ -20,7 +22,6 @@ import java.util.UUID;
  */
 @Service
 public class ChunkExtractionService {
-    private static final String SCENARIO = "TRANSCRIPT_EXTRACTION";
     private final MeetingService access;
     private final TranscriptionService transcriptions;
     private final ChunkExtractionMapper extractions;
@@ -38,7 +39,7 @@ public class ChunkExtractionService {
         this.json = json;
     }
 
-    public ChunkExtractionView extract(String meetingId, String taskId, int chunkIndex, long actor, String key, ChunkExtractionRequest input) {
+    public ChunkExtractionView extract(String meetingId, String taskId, int chunkIndex, long actor, String username, String key, ChunkExtractionRequest input) {
         access.requireOutlineEditor(meetingId, actor, false);
         try {
             if (key == null || !UUID.fromString(key).toString().equals(key)) throw new IllegalArgumentException();
@@ -52,7 +53,7 @@ public class ChunkExtractionService {
         var context = transcriptions.extractionContext(meetingId, taskId, actor, chunkIndex);
         if (context.getChunk().getSpeakerReviewVersion() != input.getSpeakerReviewVersion())
             throw new ResponseStatusException(HttpStatus.CONFLICT, "说话人校对已更新，请重新预览分段");
-        var prompt = prompts.active(SCENARIO);
+        var prompt = prompts.active(PromptScenarioCode.TRANSCRIPT_EXTRACTION.code());
         var record = new ChunkExtractionModel();
         record.setId(key);
         record.setMeetingId(meetingId);
@@ -70,7 +71,7 @@ public class ChunkExtractionService {
         long start = System.nanoTime();
         try {
             callId = prompts.startCall(prompt, meetingId, null, actor, key, null);
-            var result = agent.extract(context, prompt.getContent(), callId);
+            var result = agent.extract(context, prompt.getContent(), callId, username);
             result.setAiCallId(callId);
             String resultJson = json.writeValueAsString(result);
             if (extractions.finish(key, BusinessStatus.SUCCEEDED.code(), callId, resultJson) != 1)
@@ -81,6 +82,7 @@ public class ChunkExtractionService {
             if (callId != null)
                 prompts.finishCall(callId, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000, "EXTRACTION_FAILED");
             extractions.finish(key, BusinessStatus.FAILED.code(), callId, null);
+            if (ex instanceof ResponseStatusException statusException) throw statusException;
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "分段提取失败，请检查模型及提示词配置后重试");
         }
     }
