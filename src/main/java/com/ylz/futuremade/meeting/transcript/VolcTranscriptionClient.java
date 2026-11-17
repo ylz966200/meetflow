@@ -1,8 +1,11 @@
 package com.ylz.futuremade.meeting.transcript;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.ylz.futuremade.meeting.model.dto.VolcTranscriptionResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.ylz.futuremade.meeting.model.dto.VolcSubmitRequest;
+import com.ylz.futuremade.meeting.model.dto.VolcSubmitUser;
+import com.ylz.futuremade.meeting.model.dto.VolcSubmitAudio;
+import com.ylz.futuremade.meeting.model.dto.VolcSubmitOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,18 +19,33 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-/** 火山引擎大模型录音文件识别标准版客户端。 */
+/**
+ * 火山引擎大模型录音文件识别标准版客户端。
+ */
 public final class VolcTranscriptionClient {
     private static final Logger log = LoggerFactory.getLogger(VolcTranscriptionClient.class);
-    /** 火山录音文件识别标准版协议的提交和查询路径。 */
+    /**
+     * 火山录音文件识别标准版协议的提交和查询路径。
+     */
     private static final String SUBMIT_PATH = "/api/v3/auc/bigmodel/submit";
     private static final String QUERY_PATH = "/api/v3/auc/bigmodel/query";
-    /** 火山录音文件识别协议指定的模型名称。 */
+    /**
+     * 火山录音文件识别协议指定的模型名称。
+     */
     private static final String MODEL_NAME = "bigmodel";
     private static final String SUCCESS = "20000000";
-    /** 火山协议：任务处理中。 */ private static final String PROCESSING = "20000001";
-    /** 火山协议：任务正在排队。 */ private static final String QUEUED = "20000002";
-    /** 火山协议：音频未检测到人声。 */ private static final String SILENCE = "20000003";
+    /**
+     * 火山协议：任务处理中。
+     */
+    private static final String PROCESSING = "20000001";
+    /**
+     * 火山协议：任务正在排队。
+     */
+    private static final String QUEUED = "20000002";
+    /**
+     * 火山协议：音频未检测到人声。
+     */
+    private static final String SILENCE = "20000003";
     private final HttpClient client;
     private final ObjectMapper mapper;
     private final URI baseUri;
@@ -58,7 +76,9 @@ public final class VolcTranscriptionClient {
         this.speakerVersion = properties.getSpeakerVersion();
     }
 
-    /** 调用方必须在提交前保存请求 ID；请求超时不代表任务提交失败。 */
+    /**
+     * 调用方必须在提交前保存请求 ID；请求超时不代表任务提交失败。
+     */
     public void submit(UUID requestId, URI audioUrl, String format) throws IOException, InterruptedException {
         if (audioUrl == null || !"https".equalsIgnoreCase(audioUrl.getScheme()) || audioUrl.getHost() == null
                 || audioUrl.getUserInfo() != null) {
@@ -67,13 +87,22 @@ public final class VolcTranscriptionClient {
         if (format == null || !List.of("wav", "mp3", "ogg").contains(format)) {
             throw new IllegalArgumentException("Unsupported audio format");
         }
-        ObjectNode body = mapper.createObjectNode();
-        body.putObject("user").put("uid", uid);
-        body.putObject("audio").put("url", audioUrl.toString()).put("format", format);
+        var user = new VolcSubmitUser();
+        user.setUid(uid);
+        var audio = new VolcSubmitAudio();
+        audio.setUrl(audioUrl.toString());
+        audio.setFormat(format);
         // 当前文字稿流程依赖分句及说话人标记，必须同时开启。
-        body.putObject("request").put("model_name", MODEL_NAME)
-                .put("enable_speaker_info", true).put("show_utterances", true).put("ssd_version", speakerVersion);
-        HttpResponse<String> response = post(SUBMIT_PATH, requestId, body.toString());
+        var options = new VolcSubmitOptions();
+        options.setModelName(MODEL_NAME);
+        options.setEnableSpeakerInfo(true);
+        options.setShowUtterances(true);
+        options.setSpeakerVersion(speakerVersion);
+        var body = new VolcSubmitRequest();
+        body.setUser(user);
+        body.setAudio(audio);
+        body.setRequest(options);
+        HttpResponse<String> response = post(SUBMIT_PATH, requestId, mapper.writeValueAsString(body));
         if (!SUCCESS.equals(code(response))) {
             log.warn("语音转写任务提交失败，请求ID={}，状态码={}", requestId, code(response));
             throw failure(response);
@@ -93,20 +122,21 @@ public final class VolcTranscriptionClient {
             log.warn("语音转写任务查询失败，请求ID={}，状态码={}", requestId, status);
             throw failure(response);
         }
-        JsonNode result = mapper.readTree(response.body()).path("result");
-        JsonNode utterances = result.path("utterances");
-        if (!utterances.isArray()) throw new IOException("Speech response missing utterances");
+        var decoded = mapper.readValue(response.body(), VolcTranscriptionResponse.class);
+        if (decoded == null || decoded.getResult() == null || decoded.getResult().getUtterances() == null)
+            throw new IOException("Speech response missing utterances");
         List<TranscriptSegment> segments = new ArrayList<>();
-        for (JsonNode utterance : utterances) {
-            JsonNode start = utterance.path("start_time"), end = utterance.path("end_time");
-            if (!start.isIntegralNumber() || !end.isIntegralNumber()) throw new IOException("Invalid segment timestamps");
+        for (var utterance : decoded.getResult().getUtterances()) {
+            if (utterance == null || utterance.getStartTime() == null || utterance.getEndTime() == null)
+                throw new IOException("Invalid segment timestamps");
             // 不同语音接口版本可能返回 speaker 或 speaker_id，优先读取有效的 speaker。
-            JsonNode additions = utterance.path("additions");
-            String speaker = additions.path("speaker").asText("");
-            if (speaker.isBlank() || "-1".equals(speaker)) speaker = additions.path("speaker_id").asText("");
-            if (speaker.isBlank() || "-1".equals(speaker)) speaker = "unknown";
+            var additions = utterance.getAdditions();
+            String speaker = additions == null ? null : additions.getSpeaker();
+            if (speaker == null || speaker.isBlank() || "-1".equals(speaker))
+                speaker = additions == null ? null : additions.getSpeakerId();
+            if (speaker == null || speaker.isBlank() || "-1".equals(speaker)) speaker = "unknown";
             try {
-                segments.add(new TranscriptSegment(start.asLong(), end.asLong(), speaker, utterance.path("text").asText("")));
+                segments.add(new TranscriptSegment(utterance.getStartTime(), utterance.getEndTime(), speaker, utterance.getText()));
             } catch (IllegalArgumentException ex) {
                 throw new IOException("Invalid transcription segment", ex);
             }
@@ -138,5 +168,5 @@ public final class VolcTranscriptionClient {
         return new IOException("Speech service rejected request; status=" + code(response));
     }
 
-    public enum State { PROCESSING, SUCCEEDED }
+    public enum State {PROCESSING, SUCCEEDED}
 }

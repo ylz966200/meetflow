@@ -22,7 +22,7 @@ public class ChunkSummaryController {
     }
 
     /**
-     * 基于所有有效分段生成汇总草稿，重复请求标识不会重新调用模型。
+     * 归并全部有效分段生成大纲预览，保留候选编号；重复请求标识不会再次执行。
      */
     @PostMapping("/summary")
     public ChunkSummaryView generate(@PathVariable String meetingId, @PathVariable String taskId,

@@ -32,6 +32,11 @@ public class AiModelGateway {
         return ChatClient.builder(model(defaultName)).build().prompt().system(system).user(user).call().chatResponse();
     }
 
+    /** 使用指定模型执行对话，供评测等需要明确模型的场景复用。 */
+    public ChatResponse call(String modelName, String system, String user) {
+        return ChatClient.builder(model(modelName)).build().prompt().system(system).user(user).call().chatResponse();
+    }
+
     public ChatResponse call(Prompt prompt) {
         return model(defaultName).call(prompt);
     }

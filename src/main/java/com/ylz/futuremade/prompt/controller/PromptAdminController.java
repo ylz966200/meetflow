@@ -16,7 +16,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.security.Principal;
 import java.util.List;
-import java.util.Map;
+import com.ylz.futuremade.common.model.dto.ApiError;
 
 /**
  * 提示词管理控制器：提供管理员对提示词场景、版本、发布记录和 AI 调用记录的管理接口。
@@ -33,8 +33,8 @@ public class PromptAdminController {
     }
 
     @ExceptionHandler(ResponseStatusException.class)
-    public ResponseEntity<Map<String, String>> error(ResponseStatusException e) {
-        return ResponseEntity.status(e.getStatusCode()).body(Map.of("message", e.getReason() == null ? "操作失败" : e.getReason()));
+    public ResponseEntity<ApiError> error(ResponseStatusException e) {
+        return ResponseEntity.status(e.getStatusCode()).body(new ApiError(e.getReason() == null ? "操作失败" : e.getReason()));
     }
 
     /** 查询提示词业务场景及当前生效版本。 */

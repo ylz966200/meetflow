@@ -79,6 +79,13 @@ public class PromptService {
         return version;
     }
 
+    /** 读取指定场景的固定提示词版本，供后台任务重试使用。 */
+    public PromptVersion version(String code, long versionId) {
+        PromptVersion version = mapper.version(code, versionId);
+        if (version == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "提示词版本不存在");
+        return version;
+    }
+
     public long startCall(PromptVersion version, String meetingId, Integer transcriptVersion, long actor, String requestKey, Integer outlineVersion) {
         PromptCall call = new PromptCall();
         call.setScenario(version.getScenario());
@@ -106,11 +113,16 @@ public class PromptService {
      * 仅记录服务商返回的元数据；缺失字段保留为空，不以零代替未知值。
      */
     public void recordMetadata(long id, ChatResponse response) {
+        recordMetadata(id, response, "DeepSeek");
+    }
+
+    /** 记录指定供应商返回的模型和用量信息。 */
+    public void recordMetadata(long id, ChatResponse response, String provider) {
         if (response == null || response.getMetadata() == null) return;
         var metadata = response.getMetadata();
         var call = new PromptCall();
         call.setId(id);
-        call.setProvider("DeepSeek");
+        call.setProvider(provider);
         call.setModelName(emptyToNull(metadata.getModel()));
         call.setProviderRequestId(emptyToNull(metadata.getId()));
         var usage = metadata.getUsage();

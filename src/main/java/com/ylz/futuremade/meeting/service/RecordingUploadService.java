@@ -64,6 +64,7 @@ public class RecordingUploadService {
             storage.upload(record.getObjectKey(), stream, file.getSize());
             records.update(id, BusinessStatus.UPLOADED.code(), null);
         } catch (Exception ex) {
+            com.ylz.futuremade.common.logging.ErrorDiagnostics.error("会议录音上传失败", ex);
             records.update(id, BusinessStatus.FAILED.code(), null);
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "录音上传失败，请检查 TOS 配置");
         }

@@ -22,7 +22,7 @@ class MeetingContextToolsTest {
         assertEquals(2, ToolCallbacks.from(tools).length);
     }
 
-    @Test void limitsCallsAndLimitsReturnedItemsWithoutCuttingSpeech() {
+    @Test void continuesCallsAndLimitsReturnedItemsWithoutCuttingSpeech() {
         var properties = new MeetingContextProperties();
         properties.setMaxCalls(2); properties.setMaxUtterances(1); properties.setMaxChars(30);
         var tools = new MeetingContextTools(List.of(utterance(0,"第一句"),utterance(1,"第二句"),utterance(2,"第三句")), 3, properties);
@@ -30,7 +30,7 @@ class MeetingContextToolsTest {
         assertTrue(result.isTruncated());
         assertEquals("第三句", result.getUtterances().get(0).getText());
         assertTrue(tools.search("不存在").getUtterances().isEmpty());
-        assertTrue(tools.previous(3).getMessage().contains("上限"));
+        assertEquals("第三句", tools.previous(3).getUtterances().get(0).getText());
     }
 
     @Test void oversizedSingleResultIsReportedInsteadOfSilentlyTruncated() {

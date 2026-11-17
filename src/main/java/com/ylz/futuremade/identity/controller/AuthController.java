@@ -2,6 +2,8 @@ package com.ylz.futuremade.identity.controller;
 
 
 import com.ylz.futuremade.identity.model.dto.LoginRequest;
+import com.ylz.futuremade.identity.model.dto.LoginResponse;
+import com.ylz.futuremade.identity.model.dto.CurrentUserResponse;
 import com.ylz.futuremade.identity.mapper.AccountMapper;
 import com.ylz.futuremade.security.SecurityConfiguration;
 import org.springframework.http.HttpStatus;
@@ -14,7 +16,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
-import java.util.Map;
 
 /**
  * 身份认证控制器：提供用户名密码登录及当前登录用户信息查询。
@@ -33,7 +34,7 @@ public class AuthController {
 
     /** 验证账号密码并签发 JWT 访问令牌。 */
     @PostMapping("/api/auth/login")
-    public Map<String, Object> login(@RequestBody LoginRequest input) {
+    public LoginResponse login(@RequestBody LoginRequest input) {
         if (input.getUsername() == null || input.getUsername().isBlank() || input.getPassword() == null || input.getPassword().isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请输入用户名和密码");
         }
@@ -45,11 +46,22 @@ public class AuthController {
             var claims = JwtClaimsSet.builder().issuer(SecurityConfiguration.ISSUER).subject(account.username())
                     .issuedAt(now).expiresAt(now.plusSeconds(3600)).claim("uid", account.id()).build();
             String jwt = encoder.encode(JwtEncoderParameters.from(JwsHeader.with(MacAlgorithm.HS256).build(), claims)).getTokenValue();
-            return Map.of("accessToken", jwt, "tokenType", "Bearer", "expiresIn", 3600, "username", account.username());
+            var result = new LoginResponse();
+            result.setAccessToken(jwt);
+            result.setTokenType("Bearer");
+            result.setExpiresIn(3600);
+            result.setUsername(account.username());
+            return result;
         } catch (AuthenticationException ex) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户名或密码错误");
         }
     }
     /** 查询当前登录用户的用户名和系统角色。 */
-    @GetMapping("/api/auth/me") public Map<String, Object> currentUser(org.springframework.security.core.Authentication principal) { return Map.of("username", principal.getName(), "roles", principal.getAuthorities().stream().map(a -> a.getAuthority()).toList()); }
+    @GetMapping("/api/auth/me")
+    public CurrentUserResponse currentUser(org.springframework.security.core.Authentication principal) {
+        var result = new CurrentUserResponse();
+        result.setUsername(principal.getName());
+        result.setRoles(principal.getAuthorities().stream().map(a -> a.getAuthority()).toList());
+        return result;
+    }
 }

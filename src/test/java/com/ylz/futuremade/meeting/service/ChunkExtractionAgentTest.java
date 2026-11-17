@@ -54,13 +54,17 @@ class ChunkExtractionAgentTest {
         assertThrows(IllegalArgumentException.class,()->agent.extract(context(properties),"提示词",42,"user"));
     }
 
-    @Test void stopsWhenModelRequestsMoreToolsThanAllowed() {
+    @Test void continuesCallingToolsAfterWarningThreshold() throws Exception {
         var model=mock(AiModelGateway.class);var tools=mock(AuthorizedToolRegistry.class); when(tools.forUserScoped(anyString(), any())).thenAnswer(inv -> ToolCallbacks.from((Object) inv.getArgument(1))); var prompts=mock(PromptService.class);var properties=new MeetingContextProperties();properties.setMaxCalls(1);
         var calls=List.of(new AssistantMessage.ToolCall("c1","function","search_meeting_context","{\"query\":\"预算\"}"),new AssistantMessage.ToolCall("c2","function","search_meeting_context","{\"query\":\"预算\"}"));
-        when(model.call(any(Prompt.class))).thenReturn(response(AssistantMessage.builder().content("").toolCalls(calls).build()));
+        var finalMessage=new AssistantMessage("{\"items\":[{\"topic\":\"预算\",\"type\":\"OBJECTION\",\"content\":\"预算偏高\",\"evidenceIndices\":[0,1],\"needsReview\":true}]}");
+        when(model.call(any(Prompt.class))).thenReturn(response(AssistantMessage.builder().content("").toolCalls(calls).build()),response(finalMessage));
         var agent=new ChunkExtractionAgent(new ToolCallingExecutor(model),tools,prompts,new ObjectMapper(),properties);
-        assertThrows(IllegalStateException.class,()->agent.extract(context(properties),"提示词",42,"user"));
-        verify(model,times(1)).call(any(Prompt.class));
+        assertTrue(agent.extract(context(properties),"提示词",42,"user").getItems().get(0).getNeedsReview());
+        var captured=org.mockito.ArgumentCaptor.forClass(Prompt.class);verify(model,times(2)).call(captured.capture());
+        var followup=captured.getAllValues().get(1);
+        assertFalse(((org.springframework.ai.model.tool.ToolCallingChatOptions)followup.getOptions()).getToolCallbacks().isEmpty());
+        verify(prompts,times(2)).recordToolTrace(eq(42L),anyString());
     }
 
     @Test void refusesToExtractOnlyFromContext() {

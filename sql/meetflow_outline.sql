@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS mf_outline_version (
     version INT NOT NULL COMMENT '大纲版本号',
     transcript_version INT NOT NULL COMMENT '关联的文字稿版本号',
     status SMALLINT NOT NULL COMMENT '业务状态码，参见 BusinessStatus 枚举',
-    items_json TEXT NOT NULL COMMENT '按顺序保存大纲条目的 JSON',
+    items_json MEDIUMTEXT NOT NULL COMMENT '按顺序保存大纲条目的 JSON',
     created_by BIGINT NOT NULL COMMENT '大纲版本创建人用户 ID',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '大纲版本创建时间',
     PRIMARY KEY(meeting_id, version),

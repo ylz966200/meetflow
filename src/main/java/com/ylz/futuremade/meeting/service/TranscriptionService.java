@@ -144,6 +144,7 @@ public class TranscriptionService {
             Thread.currentThread().interrupt();
             tasks.update(taskId, BusinessStatus.UNKNOWN.code(), null);
         } catch (Exception ex) {
+            com.ylz.futuremade.common.logging.ErrorDiagnostics.error("语音转写任务提交失败", ex);
             tasks.update(taskId, BusinessStatus.UNKNOWN.code(), null);
         }
         return view(tasks.find(meetingId, taskId));
@@ -211,13 +212,17 @@ public class TranscriptionService {
         return chunker.split(taskId, view(task).getSegments(), reviewView(task));
     }
 
-    /** 为指定分段创建只读上下文工具，数据和权限由服务端限定，不由模型传入。 */
+    /**
+     * 为指定分段创建只读上下文工具，数据和权限由服务端限定，不由模型传入。
+     */
     @Transactional(readOnly = true)
     public MeetingContextTools contextTools(String meetingId, String taskId, long actor, int chunkIndex) {
         return extractionContext(meetingId, taskId, actor, chunkIndex).getTools();
     }
 
-    /** 将分段和工具绑定到同一次数据库读取的快照，避免校对版本不一致。 */
+    /**
+     * 将分段和工具绑定到同一次数据库读取的快照，避免校对版本不一致。
+     */
     @Transactional(readOnly = true)
     public ChunkExtractionContext extractionContext(String meetingId, String taskId, long actor, int chunkIndex) {
         List<TranscriptChunkView> chunks = previewChunks(meetingId, taskId, actor);
@@ -362,6 +367,7 @@ public class TranscriptionService {
             Thread.currentThread().interrupt();
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "查询转写结果中断，请稍后重试");
         } catch (Exception ex) {
+            com.ylz.futuremade.common.logging.ErrorDiagnostics.error("查询语音转写结果失败", ex);
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "查询转写结果失败，请检查资源配置并稍后重试");
         }
     }

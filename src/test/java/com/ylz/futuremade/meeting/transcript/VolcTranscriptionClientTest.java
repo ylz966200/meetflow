@@ -117,4 +117,19 @@ class VolcTranscriptionClientTest {
         var client=new VolcTranscriptionClient(HttpClient.newHttpClient(),new ObjectMapper(),URI.create("http://127.0.0.1:"+server.getAddress().getPort()),"test-key","volc.seedasr.auc");
         var result=client.query(UUID.randomUUID());assertEquals(VolcTranscriptionClient.State.SUCCEEDED,result.state());assertTrue(result.segments().isEmpty());assertEquals("",result.rawResponse());
     }
+    @Test void rejectsStringAndFractionalTimestamps() throws Exception {
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        var responseBody = new AtomicReference<>("{\"result\":{\"utterances\":[{\"start_time\":\"10\",\"end_time\":100,\"text\":\"测试\"}]}}");
+        server.createContext("/api/v3/auc/bigmodel/query", exchange -> {
+            exchange.getResponseHeaders().add("X-Api-Status-Code", "20000000");
+            byte[] body = responseBody.get().getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length); exchange.getResponseBody().write(body); exchange.close();
+        });
+        server.start();
+        var client = new VolcTranscriptionClient(HttpClient.newHttpClient(), new ObjectMapper(),
+                URI.create("http://127.0.0.1:" + server.getAddress().getPort()), "test-key", "resource");
+        assertThrows(java.io.IOException.class, () -> client.query(UUID.randomUUID()));
+        responseBody.set("{\"result\":{\"utterances\":[{\"start_time\":1.5,\"end_time\":100,\"text\":\"测试\"}]}}");
+        assertThrows(java.io.IOException.class, () -> client.query(UUID.randomUUID()));
+    }
 }

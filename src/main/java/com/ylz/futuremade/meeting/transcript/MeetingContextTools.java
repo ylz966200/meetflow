@@ -9,26 +9,22 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 绑定单次转写快照的只读工具；每个分段独立创建，禁止跨会议或访问后文。
  */
 public class MeetingContextTools {
     private final List<ChunkUtterance> earlier;
-    private final int maxCalls;
     private final int maxUtterances;
     private final int maxChars;
-    private final AtomicInteger calls = new AtomicInteger();
 
     /**
      * 当前分段的起始序号是上界；只能查询之前的发言。
      */
     public MeetingContextTools(List<ChunkUtterance> snapshot, int currentStartIndex, MeetingContextProperties properties) {
-        if (properties.getMaxCalls() < 1 || properties.getMaxUtterances() < 1 || properties.getMaxChars() < 1)
+        if (properties.getMaxUtterances() < 1 || properties.getMaxChars() < 1)
             throw new IllegalArgumentException("上下文工具配置无效");
         this.earlier = snapshot.stream().filter(item -> item.getSegmentIndex() < currentStartIndex).toList();
-        this.maxCalls = properties.getMaxCalls();
         this.maxUtterances = properties.getMaxUtterances();
         this.maxChars = properties.getMaxChars();
     }
@@ -38,8 +34,6 @@ public class MeetingContextTools {
      */
     @Tool(name = "get_previous_utterances", description = "读取当前分段之前的会议原文。beforeIndex 是原始片段序号（从0开始，不包含该序号）；返回结果按原顺序排列，不能读取当前段或后文。")
     public MeetingContextResult previous(@ToolParam(description = "起始边界片段序号，不包含该片段") int beforeIndex) {
-        if (calls.incrementAndGet() > maxCalls)
-            return result("已达到本分段的上下文工具调用上限，请标记待确认。", List.of(), false);
         if (beforeIndex < 0) return result("片段序号不能小于零。", List.of(), false);
         return collect(earlier.stream().filter(item -> item.getSegmentIndex() < beforeIndex).toList());
     }
@@ -49,8 +43,6 @@ public class MeetingContextTools {
      */
     @Tool(name = "search_meeting_context", description = "在当前分段之前的发言中按关键词查找原文，返回带来源编号的候选；该工具是字面匹配，不是语义检索。")
     public MeetingContextResult search(@ToolParam(description = "需要查找的关键词，如预算或场地；不超过100字符") String query) {
-        if (calls.incrementAndGet() > maxCalls)
-            return result("已达到本分段的上下文工具调用上限，请标记待确认。", List.of(), false);
         if (query == null || query.isBlank() || query.length() > 100)
             return result("请提供不超过100字符的关键词。", List.of(), false);
         String keyword = query.strip().toLowerCase(Locale.ROOT);

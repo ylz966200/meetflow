@@ -42,6 +42,7 @@ class SecurityConfigurationTest {
     @MockBean MinutesGenerator minutesGenerator;
     @MockBean TranscriptOrganizer transcriptOrganizer;
     @MockBean ChunkExtractionAgent chunkExtractionAgent;
+    @MockBean com.ylz.futuremade.meeting.service.TranscriptOutlineGenerator transcriptOutlineGenerator;
 
     @BeforeEach void prepareDatabase() {
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_user (id BIGINT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(100) UNIQUE, password_hash VARCHAR(100), enabled BOOLEAN)");
@@ -50,10 +51,12 @@ class SecurityConfigurationTest {
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_meeting (id CHAR(36) PRIMARY KEY, owner_id BIGINT NOT NULL, title VARCHAR(200) NOT NULL, meeting_time TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_meeting_member (meeting_id CHAR(36), user_id BIGINT, member_role VARCHAR(16), PRIMARY KEY(meeting_id, user_id))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_transcript_version (meeting_id CHAR(36), version INT, content CLOB, ai_draft_id CHAR(36), created_by BIGINT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL, PRIMARY KEY(meeting_id, version))");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS mf_transcript_segment (id BIGINT AUTO_INCREMENT PRIMARY KEY, meeting_id CHAR(36), transcript_version INT, sequence_no INT, content CLOB, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(meeting_id,transcript_version,sequence_no))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_transcript_ai_draft (id CHAR(36) PRIMARY KEY, meeting_id CHAR(36), actor_id BIGINT, expected_version INT, request_hash CHAR(64), sources_json CLOB, status SMALLINT, ai_call_id BIGINT, output_content CLOB, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_chunk_extraction (id CHAR(36) PRIMARY KEY,meeting_id CHAR(36),task_id CHAR(36),chunk_index INT,speaker_review_version INT,actor_id BIGINT,status SMALLINT,ai_call_id BIGINT,result_json CLOB,chunk_fingerprint VARCHAR(64),created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_meeting_member_audit (id BIGINT AUTO_INCREMENT PRIMARY KEY, meeting_id CHAR(36), actor_id BIGINT, target_id BIGINT, action VARCHAR(20), old_role VARCHAR(16), new_role VARCHAR(16))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_outline_version (meeting_id CHAR(36), version INT, transcript_version INT, status SMALLINT, items_json CLOB, created_by BIGINT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL, PRIMARY KEY(meeting_id,version))");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS mf_outline_source (meeting_id CHAR(36),outline_version INT,source_json CLOB,PRIMARY KEY(meeting_id,outline_version))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_minutes_version (meeting_id CHAR(36), version INT, outline_version INT, transcript_version INT, status SMALLINT, content CLOB, created_by BIGINT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(meeting_id,version))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_transcription_task (id CHAR(36) PRIMARY KEY, meeting_id CHAR(36), recording_id CHAR(36), created_by BIGINT, status SMALLINT, segments_json CLOB, raw_response CLOB, speaker_review_json CLOB, speaker_review_version INT DEFAULT 0 NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, next_poll_at TIMESTAMP, lease_token CHAR(36), lease_until TIMESTAMP, poll_count INT DEFAULT 0 NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_recording (id CHAR(36) PRIMARY KEY, meeting_id CHAR(36), object_key VARCHAR(255), original_name VARCHAR(255), file_size BIGINT, format VARCHAR(8), transcription_task_id CHAR(36), status SMALLINT, created_by BIGINT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
@@ -72,12 +75,14 @@ class SecurityConfigurationTest {
         jdbc.update("INSERT INTO mf_prompt_version(id,scenario,version,content,change_note) VALUES(3,'TRANSCRIPT_ORGANIZE',1,'整理提示词','初始化')");
         jdbc.update("INSERT INTO mf_prompt_scenario VALUES ('TRANSCRIPT_EXTRACTION','会议分段信息提取',4)");
         jdbc.update("INSERT INTO mf_prompt_version(id,scenario,version,content,change_note) VALUES(4,'TRANSCRIPT_EXTRACTION',1,'提取提示词','初始化')");
+        jdbc.update("DELETE FROM mf_transcript_segment");
         jdbc.update("DELETE FROM mf_transcript_ai_draft");
         jdbc.update("DELETE FROM mf_chunk_extraction");
         jdbc.update("DELETE FROM mf_minutes_version");
         jdbc.update("DELETE FROM mf_transcription_task");
         jdbc.update("DELETE FROM mf_recording");
         jdbc.update("DELETE FROM mf_generation_request");
+        jdbc.update("DELETE FROM mf_outline_source");
         jdbc.update("DELETE FROM mf_outline_version");
         jdbc.update("DELETE FROM mf_meeting_member_audit");
         jdbc.update("DELETE FROM mf_transcript_version");
@@ -255,6 +260,21 @@ class SecurityConfigurationTest {
         mvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + expired)).andExpect(status().isUnauthorized());
     }
 
+    @Test void evaluationDatasetRequiresAdmin() throws Exception {
+        mvc.perform(get("/api/admin/evaluation/dataset")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/admin/evaluation/dataset").header("Authorization", "Bearer " + login())).andExpect(status().isForbidden());
+        jdbc.update("INSERT INTO mf_user VALUES (2, ?, ?, TRUE)", "admin", new BCryptPasswordEncoder().encode("admin-password"));
+        jdbc.update("INSERT INTO mf_role VALUES (2, 'ADMIN', '管理员', TRUE)");
+        jdbc.update("INSERT INTO mf_user_role VALUES (2, 2)");
+        var result=mvc.perform(post("/api/auth/login").contentType("application/json").content("{\"username\":\"admin\",\"password\":\"admin-password\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse();
+        String admin=new ObjectMapper().readTree(result.getContentAsString()).get("accessToken").asText();
+        mvc.perform(get("/api/admin/evaluation/dataset").header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.datasetVersion").value("1.0.0"))
+                .andExpect(jsonPath("$.cases.length()").value(11))
+                .andExpect(jsonPath("$.cases[0].transcript[0].index").value(0));
+    }
+
     @Test void onlyAdministratorsManageUsersAndRoles() throws Exception {
         String ordinary = login();
         mvc.perform(get("/api/admin/users").header("Authorization", "Bearer " + ordinary)).andExpect(status().isForbidden());
@@ -402,6 +422,34 @@ class SecurityConfigurationTest {
                 .andExpect(status().isOk()).andExpect(jsonPath("$.version").value(2));
         org.junit.jupiter.api.Assertions.assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mf_ai_call WHERE prompt_version_id=1 AND status=4", Integer.class));
         org.junit.jupiter.api.Assertions.assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mf_ai_call WHERE prompt_version_id=1 AND status=5", Integer.class));
+    }
+
+    @Test void longTranscriptOutlineRetainsSourcesWhenReorderedEditedAndConfirmed() throws Exception {
+        String token=login();
+        var meeting=mvc.perform(post("/api/meetings").header("Authorization","Bearer "+token)
+                .contentType("application/json").content("{\"title\":\"长会议\"}")).andExpect(status().isCreated()).andReturn().getResponse();
+        String id=new ObjectMapper().readTree(meeting.getContentAsString()).get("id").asText();
+        String transcript="预算讨论内容".repeat(2100);
+        jdbc.update("INSERT INTO mf_transcript_version(meeting_id,version,content,created_by) VALUES(?,1,?,1)",id,transcript);
+        var draft=new com.ylz.futuremade.meeting.model.dto.TranscriptOutlineDraft();
+        draft.setTitles(java.util.List.of("预算","场地"));
+        draft.setSource(new ObjectMapper().readValue("{\"groups\":[{\"title\":\"预算\",\"itemIds\":[\"1:0\"]},{\"title\":\"场地\",\"itemIds\":[\"1:1\"]}],\"items\":{\"1:0\":{\"content\":\"预算内容\",\"evidenceIndices\":[0]},\"1:1\":{\"content\":\"场地内容\",\"evidenceIndices\":[1]}},\"sourceSegments\":[{\"segmentIndex\":0,\"text\":\"预算原文\"},{\"segmentIndex\":1,\"text\":\"场地原文\"}]}", com.ylz.futuremade.meeting.model.dto.OutlineSourceSnapshot.class));
+        when(transcriptOutlineGenerator.generate(org.mockito.ArgumentMatchers.eq(transcript),org.mockito.ArgumentMatchers.eq(id),org.mockito.ArgumentMatchers.eq(1),org.mockito.ArgumentMatchers.eq(1L),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString())).thenReturn(draft);
+        mvc.perform(post("/api/meetings/"+id+"/outline/generate").header("Authorization","Bearer "+token).contentType("application/json").content("{\"transcriptVersion\":1,\"expectedVersion\":0}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.sources.groups[0].itemIds[0]").value("1:0"));
+        mvc.perform(post("/api/meetings/"+id+"/outline").header("Authorization","Bearer "+token).contentType("application/json")
+                .content("{\"transcriptVersion\":1,\"expectedVersion\":1,\"items\":[\"场地调整\",\"预算\"],\"itemSourceIds\":[[\"1:1\"],[\"1:0\"]],\"confirm\":false}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.version").value(2)).andExpect(jsonPath("$.sources.groups[0].title").value("场地调整"))
+                .andExpect(jsonPath("$.sources.groups[0].itemIds[0]").value("1:1"));
+        mvc.perform(post("/api/meetings/"+id+"/outline").header("Authorization","Bearer "+token).contentType("application/json")
+                .content("{\"transcriptVersion\":1,\"expectedVersion\":2,\"items\":[\"场地调整\",\"预算\"],\"itemSourceIds\":[[\"unknown\"],[\"1:0\"]],\"confirm\":true}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/meetings/"+id+"/outline").header("Authorization","Bearer "+token).contentType("application/json")
+                .content("{\"transcriptVersion\":1,\"expectedVersion\":2,\"items\":[\"场地调整\",\"预算\"],\"itemSourceIds\":[[\"1:1\",\"1:0\"],[]],\"confirm\":false}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.version").value(3)).andExpect(jsonPath("$.sources.groups[0].itemIds[1]").value("1:0"));
+        mvc.perform(post("/api/meetings/"+id+"/outline").header("Authorization","Bearer "+token).contentType("application/json")
+                .content("{\"transcriptVersion\":1,\"expectedVersion\":3,\"items\":[\"场地调整\",\"预算\"],\"itemSourceIds\":[[\"1:1\",\"1:0\"],[]],\"confirm\":true}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.version").value(4)).andExpect(jsonPath("$.sources.groups[0].itemIds[1]").value("1:0"));
     }
 
     @Test void promptVersionsRequireAdminAndPublishWithConflictProtection() throws Exception {

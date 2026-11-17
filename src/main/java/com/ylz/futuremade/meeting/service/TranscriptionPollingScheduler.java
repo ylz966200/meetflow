@@ -54,7 +54,7 @@ public class TranscriptionPollingScheduler {
             try {
                 service.poll(task);
             } catch (Exception ex) {
-                log.warn("自动查询转写任务失败，任务ID={}，稍后重试", task.getId());
+                com.ylz.futuremade.common.logging.ErrorDiagnostics.error("自动查询转写任务失败，稍后重试", ex);
             } finally {
                 tasks.release(task.getId(), token, intervalSeconds);
             }

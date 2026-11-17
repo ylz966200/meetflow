@@ -19,10 +19,32 @@ meetflow:
   ai:
     # 已注册的 Spring ChatModel Bean 名称。
     default-model: ${MEETFLOW_AI_DEFAULT_MODEL:deepSeekChatModel}
+    # 分批预算按 UTF-8 字节估算，并非模型 Token 上限。
+    topic-batch-max-bytes: ${MEETFLOW_TOPIC_BATCH_MAX_BYTES:24000}
+    topic-max-calls: ${MEETFLOW_TOPIC_MAX_CALLS:80}
+    # 跨批归并时样例最大字符数和最大轮数。
+    topic-cross-sample-chars: ${MEETFLOW_TOPIC_CROSS_SAMPLE_CHARS:120}
+    topic-cross-merge-rounds: ${MEETFLOW_TOPIC_CROSS_MERGE_ROUNDS:4}
+    # 豆包通过方舟兼容接口单独注册；未配置时不影响现有模型。
+    doubao:
+      enabled: ${MEETFLOW_DOUBAO_ENABLED:false}
+      base-url: ${VOLC_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
+      api-key: ${VOLC_ARK_API_KEY:}
+      model: ${VOLC_ARK_MODEL:}
     platforms:
       deepseek: deepSeekChatModel
+      doubao: doubaoChatModel
+  evaluation:
+    # 评审调用使用指定的模型 Bean。
+    judge-model: doubaoChatModel
+  minutes:
+    background:
+      # 执行建表脚本后显式启用后台任务。
+      enabled: ${MEETFLOW_MINUTES_BACKGROUND_ENABLED:false}
+      poll-delay-ms: 5000
+    task-lease-seconds: 120
   transcript-context:
-    # 以下限制分别适用于单个分段的工具调用及单次返回正文。
+    # 工具调用次数仅作为日志提醒；原文单次返回仍限制条数和长度。
     max-calls: 3
     max-utterances: 10
     max-chars: 3000
@@ -50,3 +72,8 @@ meetflow:
   jwt:
     secret-base64: ${MEETFLOW_JWT_SECRET_BASE64:}
 
+
+logging:
+  level:
+    root: ${MEETFLOW_LOG_LEVEL:INFO}
+    com.ylz.futuremade: ${MEETFLOW_APP_LOG_LEVEL:INFO}

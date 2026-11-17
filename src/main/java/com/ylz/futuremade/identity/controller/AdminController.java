@@ -12,7 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import java.security.Principal;
 import java.util.List;
-import java.util.Map;
+import com.ylz.futuremade.common.model.dto.ApiError;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -29,8 +29,8 @@ public class AdminController {
     }
 
     @ExceptionHandler(ResponseStatusException.class)
-    public ResponseEntity<Map<String, String>> handleBusinessError(ResponseStatusException ex) {
-        return ResponseEntity.status(ex.getStatusCode()).body(Map.of("message", ex.getReason() == null ? "操作失败" : ex.getReason()));
+    public ResponseEntity<ApiError> handleBusinessError(ResponseStatusException ex) {
+        return ResponseEntity.status(ex.getStatusCode()).body(new ApiError(ex.getReason() == null ? "操作失败" : ex.getReason()));
     }
 
     /** 分页查询系统用户。 */

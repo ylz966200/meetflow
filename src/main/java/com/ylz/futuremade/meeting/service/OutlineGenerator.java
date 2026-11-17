@@ -1,6 +1,6 @@
 package com.ylz.futuremade.meeting.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.ylz.futuremade.meeting.model.dto.OutlineModelResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.assistant.service.AiModelGateway;
 import org.springframework.stereotype.Component;
@@ -31,15 +31,15 @@ public class OutlineGenerator {
             String response = modelResponse.getResult().getOutput().getText();
             prompts.recordOutput(callId, response);
             prompts.recordMetadata(callId, modelResponse);
-            JsonNode root = json.readTree(response);
-            JsonNode items = root.path("items");
-            if (!items.isArray() || items.isEmpty() || items.size() > 30)
+            var parsed = json.readValue(response, OutlineModelResponse.class);
+            var items = parsed.getItems();
+            if (items == null || items.isEmpty() || items.size() > 30)
                 throw new IllegalArgumentException("大纲格式无效");
             List<String> titles = new ArrayList<>();
-            for (JsonNode item : items) {
-                if (!item.isTextual() || item.asText().isBlank() || item.asText().length() > 200)
+            for (String item : items) {
+                if (item == null || item.isBlank() || item.length() > 200)
                     throw new IllegalArgumentException("大纲条目无效");
-                titles.add(item.asText().strip());
+                titles.add(item.strip());
             }
             return List.copyOf(titles);
         } catch (Exception ex) {

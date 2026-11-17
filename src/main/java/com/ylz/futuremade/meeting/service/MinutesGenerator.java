@@ -6,7 +6,7 @@ import org.springframework.stereotype.Component;
 import com.ylz.futuremade.prompt.service.PromptService;
 
 import java.util.List;
-import java.util.Map;
+import com.ylz.futuremade.meeting.model.dto.MinutesModelInput;
 
 /**
  * 根据文字稿和已确认大纲生成待审核纪要。
@@ -25,13 +25,16 @@ public class MinutesGenerator {
 
     public String generate(String transcript, List<String> outline, String systemPrompt, long callId) {
         try {
-            String data = json.writeValueAsString(Map.of("confirmedOutline", outline, "transcript", transcript));
+            var input = new MinutesModelInput();
+            input.setConfirmedOutline(outline);
+            input.setTranscript(transcript);
+            String data = json.writeValueAsString(input);
             prompts.recordInput(callId, systemPrompt, data);
             var modelResponse = model.call(systemPrompt, data);
             String response = modelResponse.getResult().getOutput().getText();
             prompts.recordOutput(callId, response);
             prompts.recordMetadata(callId, modelResponse);
-            if (response == null || response.isBlank() || response.length() > 20000)
+            if (response == null || response.isBlank() || response.length() > MinutesService.MAX_CONTENT_LENGTH)
                 throw new IllegalArgumentException("纪要内容无效");
             return response.strip();
         } catch (Exception ex) {

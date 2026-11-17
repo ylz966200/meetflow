@@ -19,7 +19,7 @@ class AuthorizedToolRegistryTest {
         ToolPermissionMapper permissionMapper = mock(ToolPermissionMapper.class);
         WeatherConfigMapper configMapper = mock(WeatherConfigMapper.class);
         ApplicationContext context = mock(ApplicationContext.class);
-        WeatherTools weather = new WeatherTools(configMapper);
+        WeatherTools weather = new WeatherTools(configMapper, new com.fasterxml.jackson.databind.ObjectMapper());
         when(context.getBeanDefinitionNames()).thenReturn(new String[]{"weatherTools"});
         when(context.getType("weatherTools")).thenReturn((Class) WeatherTools.class);
         when(context.getBean("weatherTools")).thenReturn(weather);

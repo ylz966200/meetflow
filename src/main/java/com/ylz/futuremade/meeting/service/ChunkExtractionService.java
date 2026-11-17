@@ -87,6 +87,7 @@ public class ChunkExtractionService {
             prompts.finishCall(callId, BusinessStatus.SUCCEEDED.code(), (System.nanoTime() - start) / 1_000_000, null);
             return result;
         } catch (Exception ex) {
+            com.ylz.futuremade.common.logging.ErrorDiagnostics.error("会议分段提取失败", ex);
             if (callId != null)
                 prompts.finishCall(callId, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000, "EXTRACTION_FAILED");
             extractions.finish(key, BusinessStatus.FAILED.code(), callId, null);

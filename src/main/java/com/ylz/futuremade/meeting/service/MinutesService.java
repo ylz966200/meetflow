@@ -6,6 +6,7 @@ import com.ylz.futuremade.meeting.mapper.MeetingMapper;
 import com.ylz.futuremade.meeting.mapper.MinutesMapper;
 import com.ylz.futuremade.meeting.mapper.OutlineMapper;
 import com.ylz.futuremade.meeting.model.dto.MinutesView;
+import com.ylz.futuremade.meeting.model.dto.OutlineView;
 import com.ylz.futuremade.meeting.model.entity.MinutesVersionModel;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -17,6 +18,8 @@ import org.springframework.web.server.ResponseStatusException;
  */
 @Service
 public class MinutesService {
+    /** 纪要正文最大长度，按 Java UTF-16 单元计数；与页面输入限制一致。 */
+    public static final int MAX_CONTENT_LENGTH = 200_000;
     private final MeetingService access;
     private final MeetingMapper meetings;
     private final OutlineMapper outlines;
@@ -38,14 +41,14 @@ public class MinutesService {
         return view(id, row);
     }
 
-    public OutlineService.OutlineView checkGeneration(String id, long actor, int outlineVersion, int expectedVersion, OutlineService service) {
+    public OutlineView checkGeneration(String id, long actor, int outlineVersion, int expectedVersion, OutlineService service) {
         access.requireOutlineEditor(id, actor, false);
         if (outlineVersion <= 0 || expectedVersion < 0)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "版本无效");
         if (minutes.latestVersion(id) != expectedVersion)
             throw new ResponseStatusException(HttpStatus.CONFLICT, "纪要已更新，请重新加载");
-        OutlineService.OutlineView outline = service.latest(id, actor);
-        if (outline.version() != outlineVersion || !BusinessStatus.CONFIRMED.code().equals(outline.status()) || outline.stale())
+        OutlineView outline = service.latest(id, actor);
+        if (outline.getVersion() != outlineVersion || !BusinessStatus.CONFIRMED.code().equals(outline.getStatus()) || outline.isStale())
             throw new ResponseStatusException(HttpStatus.CONFLICT, "请先确认基于最新文字稿的大纲");
         return outline;
     }
@@ -53,8 +56,8 @@ public class MinutesService {
     @Transactional
     public MinutesView save(String id, long actor, int outlineVersion, int expectedVersion, String content, boolean confirm) {
         access.requireOutlineEditor(id, actor, true);
-        if (outlineVersion <= 0 || expectedVersion < 0 || content == null || content.isBlank() || content.length() > 20000)
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "纪要正文或版本无效");
+        if (outlineVersion <= 0 || expectedVersion < 0 || content == null || content.isBlank() || content.length() > MAX_CONTENT_LENGTH)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "纪要正文不能为空、超过 200000 字符或版本无效");
         if (confirm && !Long.valueOf(actor).equals(meetings.owner(id)))
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "仅组织者可以确认纪要");
         if (minutes.latestVersion(id) != expectedVersion)

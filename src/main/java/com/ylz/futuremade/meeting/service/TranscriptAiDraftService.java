@@ -92,6 +92,7 @@ public class TranscriptAiDraftService {
                     throw new IllegalStateException("草稿状态异常");
                 return replay(drafts.find(key), meetingId, actor, hash);
             } catch (Exception ex) {
+                com.ylz.futuremade.common.logging.ErrorDiagnostics.error("文字稿整理失败", ex);
                 if (callId != null)
                     prompts.finishCall(callId, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000, "GENERATION_FAILED");
                 drafts.finish(key, BusinessStatus.FAILED.code(), callId, null);
