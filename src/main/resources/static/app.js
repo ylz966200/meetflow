@@ -174,6 +174,30 @@ async function setupAdmin() {
         } catch (error) { milvusStatus.textContent = error.message || '向量化失败。'; }
         finally { embeddingButton.disabled = false; }
     };
+    const demoButton = document.createElement('button');
+    demoButton.className = 'button outline';
+    demoButton.textContent = 'Milvus 检索实验';
+    el('new-role').before(demoButton, document.createTextNode(' '));
+    const demoResult = document.createElement('pre');
+    demoResult.className = 'evaluation-transcript';
+    demoResult.hidden = true;
+    milvusStatus.after(demoResult);
+    demoButton.onclick = async () => {
+        const query = prompt('使用三条虚构数据写入专用实验集合并检索；每次调用四次 Embedding，可能产生费用。请输入虚构问题：', '年会最多可以花多少钱？');
+        if (query === null) return;
+        if (!query.trim()) { milvusStatus.textContent = '请输入实验问题。'; return; }
+        demoButton.disabled = true; demoResult.hidden = false; demoResult.textContent = '正在计算向量并检索，首次创建集合可能需要一些时间……';
+        try {
+            const response = await api('/api/admin/knowledge/milvus/demo', {
+                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({query})
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || '实验失败，请检查方舟、Zilliz 配置和集合配额。');
+            demoResult.textContent = `实验集合：${data.collection}\n样本数：${data.sampleCount}\n向量维度：${data.dimension}\n问题向量前 ${data.vectorSample.length} 项：${data.vectorSample.join(', ')}\n\n相似度越大表示向量越接近，不代表回答正确的概率：\n` +
+                data.hits.map((hit, index) => `${index + 1}. ${hit.text}\n   样本 ID：${hit.id}　COSINE：${hit.score}`).join('\n');
+        } catch (error) { demoResult.textContent = error.message || '实验失败。'; }
+        finally { demoButton.disabled = false; }
+    };
     let page = 1, roles = [], submitAction = null;
     const dialog = el('admin-dialog'), error = el('admin-error'), fields = el('admin-fields');
 

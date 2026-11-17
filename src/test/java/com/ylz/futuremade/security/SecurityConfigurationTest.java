@@ -101,6 +101,13 @@ class SecurityConfigurationTest {
                 .contentType("application/json").content("{\"text\":\"测试\"}"))
                 .andExpect(status().isForbidden());
     }
+    @Test void milvusDemoRequiresAdministrator() throws Exception {
+        mvc.perform(post("/api/admin/knowledge/milvus/demo").contentType("application/json").content("{\"query\":\"预算\"}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/admin/knowledge/milvus/demo").header("Authorization", "Bearer " + login())
+                .contentType("application/json").content("{\"query\":\"预算\"}"))
+                .andExpect(status().isForbidden());
+    }
     @Test void milvusConnectionRequiresAdministrator() throws Exception {
         mvc.perform(get("/api/admin/knowledge/milvus/connection")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/admin/knowledge/milvus/connection").header("Authorization", "Bearer " + login()))

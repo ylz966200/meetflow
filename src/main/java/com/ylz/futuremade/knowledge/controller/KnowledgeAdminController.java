@@ -5,6 +5,9 @@ import com.ylz.futuremade.knowledge.service.MilvusConnectionService;
 import com.ylz.futuremade.knowledge.service.EmbeddingPreviewService;
 import com.ylz.futuremade.knowledge.model.dto.EmbeddingPreviewRequest;
 import com.ylz.futuremade.knowledge.model.dto.EmbeddingPreviewView;
+import com.ylz.futuremade.knowledge.model.dto.MilvusDemoRequest;
+import com.ylz.futuremade.knowledge.model.dto.MilvusDemoView;
+import com.ylz.futuremade.knowledge.service.MilvusDemoService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -19,10 +22,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 public class KnowledgeAdminController {
     private final MilvusConnectionService connection;
     private final EmbeddingPreviewService embeddings;
+    private final MilvusDemoService demo;
 
-    public KnowledgeAdminController(MilvusConnectionService connection, EmbeddingPreviewService embeddings) {
+    public KnowledgeAdminController(MilvusConnectionService connection, EmbeddingPreviewService embeddings, MilvusDemoService demo) {
         this.connection = connection;
         this.embeddings = embeddings;
+        this.demo = demo;
     }
 
     /**
@@ -39,5 +44,11 @@ public class KnowledgeAdminController {
     @PostMapping("/embedding/preview")
     public EmbeddingPreviewView preview(@RequestBody EmbeddingPreviewRequest request) {
         return embeddings.preview(request.getText());
+    }
+
+    /** 使用固定虚构数据运行向量写入与检索；调用会产生模型用量。 */
+    @PostMapping("/milvus/demo")
+    public MilvusDemoView demo(@RequestBody MilvusDemoRequest request) {
+        return demo.run(request.getQuery());
     }
 }

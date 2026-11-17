@@ -39,6 +39,26 @@ public class MilvusConnectionService {
      * 向配置的服务发起只读请求，不记录连接地址和凭证。
      */
     public MilvusConnectionView check() {
+        MilvusServiceClient client = null;
+        try {
+            client = open();
+            var result = client.withTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                    .showCollections(ShowCollectionsParam.newBuilder().build());
+            if (result.getStatus() != R.Status.Success.getCode())
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Zilliz 连接检查失败，请检查地址、凭证和集群状态");
+            return new MilvusConnectionView(true, "Zilliz 连接成功，可以开始准备向量检索实验。");
+        } catch (ResponseStatusException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            ErrorDiagnostics.error("Zilliz 连接检查失败", ex);
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Zilliz 连接检查失败，请检查地址、凭证和网络");
+        } finally {
+            close(client);
+        }
+    }
+
+    /** 创建受配置约束的客户端，调用方完成操作后必须关闭。 */
+    public MilvusServiceClient open() {
         if (!enabled)
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Milvus 尚未启用，请配置环境变量");
         if (endpoint.isBlank() || token.isBlank())
@@ -53,30 +73,16 @@ public class MilvusConnectionService {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Zilliz Endpoint 应为 HTTPS 地址");
         if (timeoutSeconds < 1 || timeoutSeconds > 60)
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Milvus 连接超时配置无效");
-        MilvusServiceClient client = null;
-        try {
-            var config = ConnectParam.newBuilder().withUri(endpoint).withToken(token)
-                    .withConnectTimeout(timeoutSeconds, TimeUnit.SECONDS).build();
-            client = new MilvusServiceClient(config);
-            var result = client.withTimeout(timeoutSeconds, TimeUnit.SECONDS)
-                    .showCollections(ShowCollectionsParam.newBuilder().build());
-            if (result.getStatus() != R.Status.Success.getCode())
-                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Zilliz 连接检查失败，请检查地址、凭证和集群状态");
-            return new MilvusConnectionView(true, "Zilliz 连接成功，可以开始准备向量检索实验。");
-        } catch (ResponseStatusException ex) {
-            throw ex;
-        } catch (Exception ex) {
-            // SDK 错误可能含请求信息，避免在应用日志或接口中暴露凭证。
-            ErrorDiagnostics.error("Zilliz 连接检查失败", ex);
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Zilliz 连接检查失败，请检查地址、凭证和网络");
-        } finally {
-            if (client != null) {
-                try {
-                    client.close(1);
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-        }
+        var config = ConnectParam.newBuilder().withUri(endpoint).withToken(token)
+                .withConnectTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                .withRpcDeadline(timeoutSeconds, TimeUnit.SECONDS).build();
+        return new MilvusServiceClient(config);
+    }
+
+    /** 关闭单次操作创建的客户端。 */
+    public void close(MilvusServiceClient client) {
+        if (client == null) return;
+        try { client.close(1); }
+        catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
     }
 }
