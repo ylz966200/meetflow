@@ -3,7 +3,6 @@ package com.ylz.futuremade.assistant.config;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -20,7 +19,7 @@ public class DoubaoModelConfiguration {
             @Value("${meetflow.ai.doubao.model}") String model) {
         if (baseUrl.isBlank() || apiKey.isBlank() || model.isBlank())
             throw new IllegalStateException("启用豆包模型时须配置方舟地址、API Key 和模型 ID");
-        var api = OpenAiApi.builder().baseUrl(baseUrl).apiKey(apiKey).completionsPath("/chat/completions").build();
+        var api = ArkApiFactory.create(baseUrl, apiKey);
         var options = OpenAiChatOptions.builder().model(model).build();
         return OpenAiChatModel.builder().openAiApi(api).defaultOptions(options).build();
     }

@@ -137,6 +137,43 @@ async function setupAdmin() {
     evaluationButton.textContent = '会议评测集';
     evaluationButton.onclick = () => setupEvaluation();
     el('new-role').before(evaluationButton, document.createTextNode(' '));
+    const milvusButton = document.createElement('button');
+    milvusButton.className = 'button outline';
+    milvusButton.textContent = '检查 Milvus 连接';
+    const milvusStatus = document.createElement('p');
+    milvusStatus.className = 'tiny-note';
+    milvusStatus.setAttribute('role', 'status');
+    el('new-role').before(milvusButton, document.createTextNode(' '));
+    root.querySelector('.page-heading').after(milvusStatus);
+    milvusButton.onclick = async () => {
+        milvusButton.disabled = true; milvusStatus.textContent = '正在检查 Zilliz 连接……';
+        try {
+            const response = await api('/api/admin/knowledge/milvus/connection');
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || (response.status === 503 ? '请检查 Milvus 是否启用，以及 Endpoint 和 Token 配置。' : '连接失败，请检查集群状态和网络。'));
+            milvusStatus.textContent = data.message;
+        } catch (error) { milvusStatus.textContent = error.message || '连接检查失败。'; }
+        finally { milvusButton.disabled = false; }
+    };
+    const embeddingButton = document.createElement('button');
+    embeddingButton.className = 'button outline';
+    embeddingButton.textContent = '试验文本向量化';
+    el('new-role').before(embeddingButton, document.createTextNode(' '));
+    embeddingButton.onclick = async () => {
+        const text = prompt('输入虚构的测试文本；请求将发送到方舟，可能产生费用。', '年会预算上限为八万元。');
+        if (text === null) return;
+        if (!text.trim()) { milvusStatus.textContent = '请输入测试文本。'; return; }
+        embeddingButton.disabled = true; milvusStatus.textContent = '正在调用豆包文本向量模型……';
+        try {
+            const response = await api('/api/admin/knowledge/embedding/preview', {
+                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text})
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || (response.status === 503 ? '请先启用并配置文本向量模型。' : '向量化失败，请检查模型、接口类型、额度与网络。'));
+            milvusStatus.textContent = `模型：${data.model}；向量维度：${data.dimension}；前 ${data.sample.length} 项：${data.sample.join(', ')}。未写入 Milvus。`;
+        } catch (error) { milvusStatus.textContent = error.message || '向量化失败。'; }
+        finally { embeddingButton.disabled = false; }
+    };
     let page = 1, roles = [], submitAction = null;
     const dialog = el('admin-dialog'), error = el('admin-error'), fields = el('admin-fields');
 

@@ -94,6 +94,18 @@ class SecurityConfigurationTest {
         jdbc.update("INSERT INTO mf_user_role VALUES (1, 1)");
     }
 
+    @Test void embeddingPreviewRequiresAdministrator() throws Exception {
+        mvc.perform(post("/api/admin/knowledge/embedding/preview").contentType("application/json").content("{\"text\":\"测试\"}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/admin/knowledge/embedding/preview").header("Authorization", "Bearer " + login())
+                .contentType("application/json").content("{\"text\":\"测试\"}"))
+                .andExpect(status().isForbidden());
+    }
+    @Test void milvusConnectionRequiresAdministrator() throws Exception {
+        mvc.perform(get("/api/admin/knowledge/milvus/connection")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/admin/knowledge/milvus/connection").header("Authorization", "Bearer " + login()))
+                .andExpect(status().isForbidden());
+    }
     @Test void loginAndBearerAuthentication() throws Exception {
         mvc.perform(get("/")).andExpect(status().isOk());
         mvc.perform(get("/app.css")).andExpect(status().isOk());
