@@ -54,11 +54,16 @@ public interface PromptMapper {
 
     @Insert("INSERT INTO mf_ai_call_content(call_id,system_content,user_content) VALUES(#{callId},#{systemContent},#{userContent})")
     int insertContent(AiCallContent content);
+
     @Update("UPDATE mf_ai_call_content SET output_content=#{outputContent} WHERE call_id=#{callId}")
-    int updateOutput(@Param("callId") long callId,@Param("outputContent") String outputContent);
-    /** 保存上下文工具的敏感调用轨迹，不写入应用日志。 */
+    int updateOutput(@Param("callId") long callId, @Param("outputContent") String outputContent);
+
+    /**
+     * 保存上下文工具的敏感调用轨迹，不写入应用日志。
+     */
     @Update("UPDATE mf_ai_call_content SET tool_trace=#{trace} WHERE call_id=#{callId}")
-    int updateToolTrace(@Param("callId") long callId,@Param("trace") String trace);
+    int updateToolTrace(@Param("callId") long callId, @Param("trace") String trace);
+
     @Select("SELECT call_id AS callId,system_content AS systemContent,user_content AS userContent,output_content AS outputContent,tool_trace AS toolTrace,created_at AS createdAt FROM mf_ai_call_content WHERE call_id=#{callId}")
     AiCallContent content(long callId);
 

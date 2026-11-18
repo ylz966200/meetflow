@@ -57,7 +57,9 @@ public class MilvusConnectionService {
         }
     }
 
-    /** 创建受配置约束的客户端，调用方完成操作后必须关闭。 */
+    /**
+     * 创建受配置约束的客户端，调用方完成操作后必须关闭。
+     */
     public MilvusServiceClient open() {
         if (!enabled)
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Milvus 尚未启用，请配置环境变量");
@@ -79,10 +81,15 @@ public class MilvusConnectionService {
         return new MilvusServiceClient(config);
     }
 
-    /** 关闭单次操作创建的客户端。 */
+    /**
+     * 关闭单次操作创建的客户端。
+     */
     public void close(MilvusServiceClient client) {
         if (client == null) return;
-        try { client.close(1); }
-        catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
+        try {
+            client.close(1);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

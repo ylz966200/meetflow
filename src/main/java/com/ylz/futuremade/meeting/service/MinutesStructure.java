@@ -20,6 +20,8 @@ public final class MinutesStructure {
             section.setOutlineId(item.getOutlineId());
             section.setTitle(outline.getItems().get(item.getOutlineId() - 1));
             section.setContent(item.getContent());
+            section.setDiscussion(item.getDiscussion());
+            section.setConclusions(item.getConclusions());
             section.setSourceSegmentIds(item.getSourceSegmentIds());
             section.setNeedsReview(item.getNeedsReview());
             sections.add(section);
@@ -34,9 +36,14 @@ public final class MinutesStructure {
     public static String format(StructuredMinutes document) {
         var text = new StringBuilder("会议纪要\n");
         for (var section : document.getSections()) {
-            text.append('\n').append(section.getOutlineId()).append(". ").append(section.getTitle()).append('\n')
-                    .append(section.getContent()).append(Boolean.TRUE.equals(section.getNeedsReview()) ? "（待确认）" : "")
-                    .append("\n来源片段：").append(section.getSourceSegmentIds()).append('\n');
+            text.append('\n').append(section.getOutlineId()).append(". ").append(section.getTitle()).append('\n');
+            if (section.getDiscussion() == null) {
+                text.append(section.getContent()).append(Boolean.TRUE.equals(section.getNeedsReview()) ? "（待确认）" : "")
+                        .append("\n来源片段：").append(section.getSourceSegmentIds()).append('\n');
+            } else {
+                appendPoints(text, "讨论内容", section.getDiscussion());
+                appendPoints(text, "会议结论", section.getConclusions());
+            }
         }
         text.append("\n行动项\n");
         for (var action : document.getActions()) {
@@ -50,4 +57,22 @@ public final class MinutesStructure {
     }
 
     private static String value(String text) { return text == null || text.isBlank() ? "待确认" : text; }
+    /** 为检索提供议题的讨论和结论；历史纪要继续使用原正文。 */
+    public static String sectionContent(MinutesSection section) {
+        if (section.getDiscussion() == null) return section.getContent();
+        var text = new StringBuilder();
+        appendPoints(text, "讨论内容", section.getDiscussion());
+        appendPoints(text, "会议结论", section.getConclusions());
+        return text.toString().strip();
+    }
+
+    private static void appendPoints(StringBuilder text, String title, List<com.ylz.futuremade.meeting.model.dto.MinutesPoint> points) {
+        text.append(title).append('：');
+        if (points == null || points.isEmpty()) text.append("无");
+        else for (var point : points)
+            text.append('\n').append("- ").append(point.getContent())
+                    .append(Boolean.TRUE.equals(point.getNeedsReview()) ? "（待确认）" : "")
+                    .append("；来源片段：").append(point.getSourceSegmentIds());
+        text.append('\n');
+    }
 }

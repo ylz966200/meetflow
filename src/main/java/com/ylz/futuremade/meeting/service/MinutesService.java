@@ -10,8 +10,10 @@ import com.ylz.futuremade.meeting.model.dto.OutlineView;
 import com.ylz.futuremade.meeting.model.entity.MinutesVersionModel;
 import com.ylz.futuremade.meeting.model.dto.StructuredMinutes;
 import com.ylz.futuremade.meeting.model.dto.MinutesSection;
+import com.ylz.futuremade.meeting.model.dto.MinutesPoint;
 import com.ylz.futuremade.meeting.model.dto.MinutesActionItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ylz.futuremade.knowledge.service.KnowledgeIndexTaskService;
 
 import java.util.Objects;
 import java.util.ArrayList;
@@ -35,13 +37,15 @@ public class MinutesService {
     private final OutlineMapper outlines;
     private final MinutesMapper minutes;
     private final ObjectMapper json;
+    private final KnowledgeIndexTaskService indexTasks;
 
-    public MinutesService(MeetingService access, MeetingMapper meetings, OutlineMapper outlines, MinutesMapper minutes, ObjectMapper json) {
+    public MinutesService(MeetingService access, MeetingMapper meetings, OutlineMapper outlines, MinutesMapper minutes, ObjectMapper json, KnowledgeIndexTaskService indexTasks) {
         this.access = access;
         this.meetings = meetings;
         this.outlines = outlines;
         this.minutes = minutes;
         this.json = json;
+        this.indexTasks = indexTasks;
     }
 
     public MinutesView get(String id, long actor, Integer version) {
@@ -97,14 +101,24 @@ public class MinutesService {
             for (int i = 0; i < original.getSections().size(); i++) {
                 var old = original.getSections().get(i);
                 var edit = input.getSections().get(i);
-                if (edit == null || !Objects.equals(old.getOutlineId(), edit.getOutlineId()) || edit.getContent() == null || edit.getContent().isBlank())
+                if (edit == null || !Objects.equals(old.getOutlineId(), edit.getOutlineId()))
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "纪要条目顺序或正文无效");
                 var section = new MinutesSection();
                 section.setOutlineId(old.getOutlineId());
                 section.setTitle(old.getTitle());
-                section.setContent(edit.getContent().strip());
+                if (old.getDiscussion() == null) {
+                    if (edit.getContent() == null || edit.getContent().isBlank())
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "纪要正文不能为空");
+                    section.setContent(edit.getContent().strip());
+                } else {
+                    section.setDiscussion(editPoints(old.getDiscussion(), edit.getDiscussion()));
+                    section.setConclusions(editPoints(old.getConclusions(), edit.getConclusions()));
+                    if (section.getDiscussion().isEmpty() && section.getConclusions().isEmpty())
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "讨论内容和会议结论不能同时为空");
+                }
                 section.setSourceSegmentIds(old.getSourceSegmentIds());
-                section.setNeedsReview(Boolean.TRUE.equals(old.getNeedsReview()) || !ContentComparison.normalize(old.getContent()).equals(ContentComparison.normalize(edit.getContent())));
+                section.setNeedsReview(Boolean.TRUE.equals(old.getNeedsReview()) || old.getDiscussion() == null
+                        && !ContentComparison.normalize(old.getContent()).equals(ContentComparison.normalize(edit.getContent())));
                 sections.add(section);
             }
             if (input.getActions() == null || input.getActions().size() != original.getActions().size())
@@ -132,6 +146,23 @@ public class MinutesService {
         } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
             throw new IllegalStateException("纪要结构无法读取", ex);
         }
+    }
+
+    private java.util.List<MinutesPoint> editPoints(java.util.List<MinutesPoint> original, java.util.List<MinutesPoint> edits) {
+        if (original == null || edits == null || original.size() > edits.size())
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "纪要内容条目已变化，请重新加载");
+        var result = new ArrayList<MinutesPoint>();
+        for (int i = 0; i < edits.size(); i++) {
+            var old = i < original.size() ? original.get(i) : null; var edit = edits.get(i);
+            if (edit == null || edit.getContent() == null || edit.getContent().isBlank())
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "讨论内容和会议结论不能为空");
+            var point = new MinutesPoint();
+            point.setContent(edit.getContent().strip());
+            point.setSourceSegmentIds(old == null ? java.util.List.of() : old.getSourceSegmentIds());
+            point.setNeedsReview(old == null || Boolean.TRUE.equals(old.getNeedsReview()) || !ContentComparison.normalize(old.getContent()).equals(ContentComparison.normalize(edit.getContent())));
+            result.add(point);
+        }
+        return result;
     }
 
     private MinutesView saveVersion(String id, long actor, int outlineVersion, int expectedVersion, String content, boolean confirm, StructuredMinutes structured) {
@@ -167,6 +198,9 @@ public class MinutesService {
         row.setStructuredJson(encode(structured));
         row.setCreatedBy(actor);
         minutes.insert(row);
+        // 任务与纪要在同一事务中写入，进程退出后仍可由后台扫描恢复。
+        if (confirm)
+            indexTasks.create(id, row.getVersion(), row.getTranscriptVersion(), row.getOutlineVersion(), actor);
         return view(id, minutes.find(id, expectedVersion + 1));
     }
 

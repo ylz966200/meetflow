@@ -15,6 +15,10 @@ spring:
   config:
     import: file:./config/futuremade-datasource.properties
 
+mybatis:
+  configuration:
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+
 meetflow:
   knowledge:
     milvus:
@@ -89,3 +93,8 @@ logging:
   level:
     root: ${MEETFLOW_LOG_LEVEL:INFO}
     com.ylz.futuremade: ${MEETFLOW_APP_LOG_LEVEL:INFO}
+    com.ylz.futuremade.assistant.mapper: ${MEETFLOW_MYBATIS_LOG_LEVEL:DEBUG}
+    com.ylz.futuremade.evaluation.mapper: ${MEETFLOW_MYBATIS_LOG_LEVEL:DEBUG}
+    com.ylz.futuremade.identity.mapper: ${MEETFLOW_MYBATIS_LOG_LEVEL:DEBUG}
+    com.ylz.futuremade.meeting.mapper: ${MEETFLOW_MYBATIS_LOG_LEVEL:DEBUG}
+    com.ylz.futuremade.prompt.mapper: ${MEETFLOW_MYBATIS_LOG_LEVEL:DEBUG}

@@ -19,6 +19,10 @@ public class MinutesBatchItem {
      * 依据候选内容和原文生成的纪要。
      */
     private String content;
+    /** 本大纲的讨论内容；旧版历史批次可能为空。 */
+    private List<MinutesPoint> discussion;
+    /** 本大纲已明确的会议结论。 */
+    private List<MinutesPoint> conclusions;
     /**
      * 实际引用的文字稿片段序号，从零开始。
      */

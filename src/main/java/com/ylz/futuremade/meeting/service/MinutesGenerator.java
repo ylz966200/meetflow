@@ -49,11 +49,14 @@ public class MinutesGenerator {
             Set<Integer> covered = new HashSet<>();
             for (var item : result.getMinutes()) {
                 if (item.getOutlineId() == null || item.getOutlineId() < 1 || item.getOutlineId() > outline.size()
-                        || !covered.add(item.getOutlineId()) || item.getContent() == null || item.getContent().isBlank()
-                        || item.getNeedsReview() == null)
+                        || !covered.add(item.getOutlineId()) || !validItem(item))
                     throw new IllegalArgumentException("纪要条目无效");
                 // 旧文字稿没有可验证的来源编号，不保存模型虚构的编号。
                 item.setSourceSegmentIds(List.of());
+                if (item.getDiscussion() != null) {
+                    java.util.stream.Stream.concat(item.getDiscussion().stream(), item.getConclusions().stream())
+                            .forEach(point -> point.setSourceSegmentIds(List.of()));
+                }
             }
             if (covered.size() != outline.size()) throw new IllegalArgumentException("纪要未完整覆盖大纲");
             for (var action : result.getActions()) {
@@ -69,6 +72,15 @@ public class MinutesGenerator {
         } catch (Exception ex) {
             throw new MinutesGenerationException(ex);
         }
+    }
+
+    private boolean validItem(com.ylz.futuremade.meeting.model.dto.MinutesBatchItem item) {
+        if (item.getDiscussion() == null && item.getConclusions() == null)
+            return item.getContent() != null && !item.getContent().isBlank() && item.getNeedsReview() != null;
+        if (item.getDiscussion() == null || item.getConclusions() == null
+                || item.getDiscussion().isEmpty() && item.getConclusions().isEmpty()) return false;
+        return java.util.stream.Stream.concat(item.getDiscussion().stream(), item.getConclusions().stream())
+                .allMatch(point -> point != null && point.getContent() != null && !point.getContent().isBlank() && point.getNeedsReview() != null);
     }
 
     /**

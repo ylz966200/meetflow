@@ -121,7 +121,115 @@ function navigate(page) {
     if (page === 'meetings') setupMeetings();
     if (page === 'admin' && isAdmin) setupAdmin();
     if (page === 'assistant') setupChat();
+    if (page === 'knowledge') setupKnowledge();
     content.focus({preventScroll: true});
+}
+
+/** 选择有权限的会议，查看纪要索引状态并基于该会议问答。 */
+async function setupKnowledge() {
+    const root = el('content');
+    root.innerHTML = `<div class="page-heading"><div><div class="section-kicker">KNOWLEDGE</div><h1>会议知识库</h1><p class="subtitle">选择会议，基于已确认纪要对话并追溯参考内容。</p></div></div><section class="panel"><label class="form-label">选择会议<select id="knowledge-meeting"><option value="">正在加载会议…</option></select></label><div class="meeting-pages"><button class="button outline" id="knowledge-prev">上一页</button><span id="knowledge-page"></span><button class="button outline" id="knowledge-next">下一页</button></div><p id="knowledge-status" class="tiny-note" role="status"></p><button type="button" class="button outline" id="knowledge-index" hidden>为历史纪要建立索引</button><button type="button" class="button outline" id="knowledge-retry" hidden>重试索引</button><div class="knowledge-chat"><div class="knowledge-chat-header"><div><strong>会议知识问答</strong><p class="tiny-note">记住本页面各会议最近四轮对话；刷新或离开后清除。</p></div><button type="button" class="button outline" id="knowledge-clear">清空对话</button></div><div id="knowledge-result" class="knowledge-chat-messages" role="log" aria-live="polite"></div><form id="knowledge-form" class="knowledge-compose"><label class="form-label" for="knowledge-question">输入问题</label><textarea id="knowledge-question" maxlength="1000" rows="2" placeholder="例如：会议确定了哪些事项？"></textarea><div><span class="tiny-note">Enter 发送，Shift + Enter 换行</span><button type="submit" class="button primary" id="knowledge-ask">发送</button></div></form></div></section>`;
+    const select = el('knowledge-meeting'), status = el('knowledge-status'), retry = el('knowledge-retry'), result = el('knowledge-result');
+    let page = 1, statusTimer, chatEpoch = 0;
+    const conversations = new Map();
+    function renderConversation() {
+        result.replaceChildren();
+        const turns = conversations.get(select.value) || [];
+        if (!turns.length) { const hint = document.createElement('p'); hint.className = 'knowledge-empty'; hint.textContent = select.value ? '输入问题，开始了解这场会议。' : '请选择会议后开始提问。'; result.append(hint); return; }
+        for (const turn of turns) {
+            const user = document.createElement('div'); user.className = 'message user'; user.textContent = turn.question; result.append(user);
+            const reply = document.createElement('div'); reply.className = 'message assistant'; reply.textContent = turn.answer; result.append(reply);
+            if (turn.sources?.length) {
+                const details = document.createElement('details'); details.className = 'knowledge-sources';
+                const summary = document.createElement('summary'); summary.textContent = `查看参考纪要（版本 ${turn.minutesVersion} · ${turn.sources.length} 条）`;
+                details.append(summary);
+                for (const source of turn.sources) {
+                    const item = document.createElement('div'); item.className = 'knowledge-source';
+                    const title = document.createElement('strong'); title.textContent = source.title;
+                    const text = document.createElement('p'); text.textContent = source.content;
+                    const score = document.createElement('small'); score.textContent = `相似度：${Number(source.score).toFixed(3)}`;
+                    item.append(title, text, score); details.append(item);
+                }
+                reply.append(details);
+            }
+        }
+        result.scrollTop = result.scrollHeight;
+    }
+    async function loadMeetings() {
+        const response = await api(`/api/meetings?page=${page}&size=20`);
+        if (!response.ok) throw new Error('会议列表加载失败。');
+        const rows = await response.json();
+        if (!document.contains(select)) return;
+        select.replaceChildren(new Option('请选择会议', ''));
+        rows.forEach(meeting => select.add(new Option(meeting.title, meeting.id)));
+        el('knowledge-page').textContent = `第 ${page} 页`;
+        el('knowledge-prev').disabled = page === 1; el('knowledge-next').disabled = rows.length < 20;
+        status.textContent = ''; retry.hidden = true; renderConversation();
+    }
+    el('knowledge-prev').onclick = () => { page--; loadMeetings().catch(error => status.textContent = error.message); };
+    el('knowledge-next').onclick = () => { page++; loadMeetings().catch(error => status.textContent = error.message); };
+    async function showStatus() {
+        clearTimeout(statusTimer);
+        const id = select.value; retry.hidden = true; el('knowledge-index').hidden = true;
+        if (!id) { status.textContent = ''; return; }
+        const response = await api(`/api/meetings/${encodeURIComponent(id)}/knowledge/index-status`);
+        if (!document.contains(select) || select.value !== id) return;
+        if (response.status === 404) { status.textContent = '暂无索引任务，新确认的结构化纪要将自动建立索引。'; el('knowledge-index').hidden = false; return; }
+        if (!response.ok) { status.textContent = '无法查看索引状态，请确认你有该会议的纪要编辑权限。'; return; }
+        const data = await response.json();
+        const previous = conversations.get(id);
+        if (previous?.length && previous[0].minutesVersion !== data.minutesVersion) {
+            conversations.delete(id); chatEpoch++; renderConversation();
+        }
+        const states = {1: '等待执行', 2: '索引中', 4: '已完成', 5: '失败'};
+        status.textContent = `纪要版本 ${data.minutesVersion}：${states[data.status] || '未知状态'}${data.status === 5 ? '，请检查服务配置后重试。' : ''}`;
+        retry.hidden = data.status !== 5;
+        if (data.status === 1 || data.status === 2)
+            statusTimer = setTimeout(() => { if (document.contains(select)) showStatus().catch(() => status.textContent = '索引状态加载失败。'); }, 5000);
+    }
+    select.onchange = () => { chatEpoch++; renderConversation(); showStatus().catch(() => status.textContent = '索引状态加载失败。'); };
+    el('knowledge-clear').onclick = () => { if (!select.value) return; conversations.delete(select.value); chatEpoch++; renderConversation(); };
+    el('knowledge-index').onclick = async function () {
+        const id = select.value; this.disabled = true;
+        try {
+            const response = await api(`/api/meetings/${encodeURIComponent(id)}/knowledge/index`, {method:'POST'});
+            if (!response.ok) { const data = await response.json(); throw new Error(data.message || '无法创建索引任务。'); }
+            await showStatus();
+        } catch (error) { status.textContent = error.message; } finally { this.disabled = false; }
+    };
+    retry.onclick = async () => {
+        const id = select.value; retry.disabled = true;
+        try {
+            const response = await api(`/api/meetings/${encodeURIComponent(id)}/knowledge/index-retry`, {method:'POST'});
+            if (!response.ok) throw new Error('索引重试失败，请刷新状态。');
+            await showStatus();
+        } catch (error) { status.textContent = error.message; } finally { retry.disabled = false; }
+    };
+    el('knowledge-question').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); el('knowledge-form').requestSubmit(); } };
+    el('knowledge-form').onsubmit = async event => {
+        event.preventDefault();
+        const id = select.value, question = el('knowledge-question').value.trim();
+        if (!id || !question) { status.textContent = '请选择会议并输入问题。'; return; }
+        const button = el('knowledge-ask'), epoch = chatEpoch;
+        if (button.disabled) return;
+        const turns = conversations.get(id) || [];
+        const history = turns.slice(-4).map(turn => ({question: turn.question, answer: turn.answer.slice(0, 2000)}));
+        button.disabled = true;
+        result.querySelector('.knowledge-empty')?.remove();
+        const pendingQuestion = document.createElement('div'); pendingQuestion.className = 'message user'; pendingQuestion.textContent = question;
+        const pending = document.createElement('div'); pending.className = 'message assistant'; pending.textContent = '正在检索并生成回答……'; result.append(pendingQuestion, pending); result.scrollTop = result.scrollHeight;
+        try {
+            const response = await api(`/api/meetings/${encodeURIComponent(id)}/knowledge/answer`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question, history, minutesVersion: turns[0]?.minutesVersion || null})});
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || '问答失败，请检查权限和索引状态。');
+            if (!document.contains(select) || select.value !== id || epoch !== chatEpoch) return;
+            if (turns.length && turns[0].minutesVersion !== data.minutesVersion) { conversations.delete(id); status.textContent = '纪要版本已变化，之前的对话已清除，请重新提问。'; renderConversation(); return; }
+            turns.push({question, answer: data.answer, minutesVersion: data.minutesVersion, sources: data.sources});
+            conversations.set(id, turns); el('knowledge-question').value = ''; renderConversation();
+        } catch (error) { if (document.contains(select) && select.value === id && epoch === chatEpoch) { pending.textContent = error.message; pending.classList.add('knowledge-error'); } }
+        finally { if (document.contains(button)) button.disabled = false; }
+    };
+    try { await loadMeetings(); } catch (error) { status.textContent = error.message; }
 }
 
 async function setupAdmin() {
@@ -154,49 +262,6 @@ async function setupAdmin() {
             milvusStatus.textContent = data.message;
         } catch (error) { milvusStatus.textContent = error.message || '连接检查失败。'; }
         finally { milvusButton.disabled = false; }
-    };
-    const embeddingButton = document.createElement('button');
-    embeddingButton.className = 'button outline';
-    embeddingButton.textContent = '试验文本向量化';
-    el('new-role').before(embeddingButton, document.createTextNode(' '));
-    embeddingButton.onclick = async () => {
-        const text = prompt('输入虚构的测试文本；请求将发送到方舟，可能产生费用。', '年会预算上限为八万元。');
-        if (text === null) return;
-        if (!text.trim()) { milvusStatus.textContent = '请输入测试文本。'; return; }
-        embeddingButton.disabled = true; milvusStatus.textContent = '正在调用豆包文本向量模型……';
-        try {
-            const response = await api('/api/admin/knowledge/embedding/preview', {
-                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text})
-            });
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.message || (response.status === 503 ? '请先启用并配置文本向量模型。' : '向量化失败，请检查模型、接口类型、额度与网络。'));
-            milvusStatus.textContent = `模型：${data.model}；向量维度：${data.dimension}；前 ${data.sample.length} 项：${data.sample.join(', ')}。未写入 Milvus。`;
-        } catch (error) { milvusStatus.textContent = error.message || '向量化失败。'; }
-        finally { embeddingButton.disabled = false; }
-    };
-    const demoButton = document.createElement('button');
-    demoButton.className = 'button outline';
-    demoButton.textContent = 'Milvus 检索实验';
-    el('new-role').before(demoButton, document.createTextNode(' '));
-    const demoResult = document.createElement('pre');
-    demoResult.className = 'evaluation-transcript';
-    demoResult.hidden = true;
-    milvusStatus.after(demoResult);
-    demoButton.onclick = async () => {
-        const query = prompt('使用三条虚构数据写入专用实验集合并检索；每次调用四次 Embedding，可能产生费用。请输入虚构问题：', '年会最多可以花多少钱？');
-        if (query === null) return;
-        if (!query.trim()) { milvusStatus.textContent = '请输入实验问题。'; return; }
-        demoButton.disabled = true; demoResult.hidden = false; demoResult.textContent = '正在计算向量并检索，首次创建集合可能需要一些时间……';
-        try {
-            const response = await api('/api/admin/knowledge/milvus/demo', {
-                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({query})
-            });
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.message || '实验失败，请检查方舟、Zilliz 配置和集合配额。');
-            demoResult.textContent = `实验集合：${data.collection}\n样本数：${data.sampleCount}\n向量维度：${data.dimension}\n问题向量前 ${data.vectorSample.length} 项：${data.vectorSample.join(', ')}\n\n相似度越大表示向量越接近，不代表回答正确的概率：\n` +
-                data.hits.map((hit, index) => `${index + 1}. ${hit.text}\n   样本 ID：${hit.id}　COSINE：${hit.score}`).join('\n');
-        } catch (error) { demoResult.textContent = error.message || '实验失败。'; }
-        finally { demoButton.disabled = false; }
     };
     let page = 1, roles = [], submitAction = null;
     const dialog = el('admin-dialog'), error = el('admin-error'), fields = el('admin-fields');
@@ -495,6 +560,8 @@ async function openMeeting(id) {
             {key: 'members', label: '成员与权限', number: '05', node: memberPanel}
         ];
         grid.before(tablist, paneContainer);
+        let activeTabIndex = 0;
+        let loadMeetingTab = () => {};
         for (const [index, step] of steps.entries()) {
             const button = document.createElement('button');
             button.type = 'button';
@@ -535,6 +602,8 @@ async function openMeeting(id) {
         }
 
         function activateMeetingTab(index) {
+            const changed = activeTabIndex !== index;
+            activeTabIndex = index;
             Array.from(tablist.children).forEach((button, i) => {
                 const active = i === index;
                 button.classList.toggle('active', active);
@@ -542,6 +611,7 @@ async function openMeeting(id) {
                 button.tabIndex = active ? 0 : -1;
                 paneContainer.children[i].hidden = !active;
             });
+            if (changed) loadMeetingTab(steps[index].key);
         }
 
         grid.remove();
@@ -657,8 +727,27 @@ async function openMeeting(id) {
             el('transcript-message').textContent = currentRole === 'VIEWER' ? '当前为只读权限。' : '无法确认权限，请重新打开会议。';
         }
         if (currentRole === 'ORGANIZER' || currentRole === 'EDITOR') {
-            setupOutline(id, currentRole, () => version, () => editor.value !== saved);
-            setupMinutes(id, currentRole, () => editor.value !== saved);
+            const tabLoaders = {
+                outline: () => setupOutline(id, currentRole, () => version, () => editor.value !== saved),
+                minutes: () => setupMinutes(id, currentRole, () => editor.value !== saved)
+            };
+            const tabStates = {};
+            loadMeetingTab = async key => {
+                if (!tabLoaders[key]) return;
+                if (tabStates[key]?.loading) return;
+                const state = tabStates[key] || (tabStates[key] = {});
+                state.loading = true;
+                try {
+                    if (!state.initialized) {
+                        state.refresh = await tabLoaders[key]();
+                        state.initialized = true;
+                    } else if (state.refresh) await state.refresh();
+                } catch (error) {
+                    const target = el(key === 'outline' ? 'outline-message' : 'minutes-message');
+                    if (target) target.textContent = error.message || '页面加载失败，请重试。';
+                } finally { state.loading = false; }
+            };
+            loadMeetingTab(steps[activeTabIndex].key);
         }
         if (currentRole === 'ORGANIZER' || currentRole === 'EDITOR') setupTranscription(id, editor, () => version);
         else {
@@ -1351,7 +1440,14 @@ async function setupMinutes(id, role, transcriptDirty) {
     if (role !== 'ORGANIZER') el('minutes-confirm').classList.add('hidden');
 
     function currentSections() {
-        return Array.from(sectionEditor.querySelectorAll('textarea')).map(input => input.value);
+        return Array.from(sectionEditor.querySelectorAll('.minutes-section')).map(block => {
+            const legacy = block.querySelector('[data-section-content]');
+            if (legacy) return {content: legacy.value};
+            return {
+                discussion: Array.from(block.querySelectorAll('[data-point="discussion"]')).map(input => input.value),
+                conclusions: Array.from(block.querySelectorAll('[data-point="conclusions"]')).map(input => input.value)
+            };
+        });
     }
     function currentActions() {
         return Array.from(sectionEditor.querySelectorAll('.minutes-action')).map(block => ({
@@ -1376,15 +1472,34 @@ async function setupMinutes(id, role, transcriptDirty) {
         sectionEditor.replaceChildren();
         if (structured) {
             for (const section of structured.sections) {
-                const block = document.createElement('section'), title = document.createElement('h4'), input = document.createElement('textarea');
+                const block = document.createElement('section'), title = document.createElement('h4');
                 block.className = 'minutes-section';
                 title.textContent = `${section.outlineId}. ${section.title}`;
-                input.className = 'transcript-editor'; input.rows = 4; input.maxLength = MINUTES_MAX_CONTENT_LENGTH;
-                input.value = section.content; input.setAttribute('aria-label', section.title + '纪要内容');
-                input.oninput = () => { editor.dataset.structuredDirty = String(isDirty()); };
+                block.append(title);
+                function addEditor(value, label, field) {
+                    const wrapper = document.createElement('label'), input = document.createElement('textarea');
+                    wrapper.className = 'form-label'; wrapper.textContent = label;
+                    input.className = 'transcript-editor'; input.rows = 3; input.maxLength = MINUTES_MAX_CONTENT_LENGTH;
+                    input.value = value || ''; input.setAttribute('aria-label', section.title + label);
+                    if (field) input.dataset.point = field; else input.dataset.sectionContent = '';
+                    input.oninput = () => { editor.dataset.structuredDirty = String(isDirty()); };
+                    wrapper.append(input); block.append(wrapper);
+                }
+                if (section.discussion == null) addEditor(section.content, '历史纪要正文', null);
+                else for (const [field, label] of [['discussion', '讨论内容'], ['conclusions', '会议结论']]) {
+                    let empty = null;
+                    if (!section[field]?.length) {
+                        empty = document.createElement('p'); empty.className = 'tiny-note'; empty.textContent = label + '：无';
+                        block.append(empty);
+                    }
+                    for (const point of section[field] || []) addEditor(point.content, label, field);
+                    const add = document.createElement('button'); add.type = 'button'; add.className = 'button outline'; add.textContent = '添加' + label;
+                    add.onclick = () => { if (empty) { empty.remove(); empty = null; } addEditor('', label, field); editor.dataset.structuredDirty = 'true'; };
+                    block.append(add);
+                }
                 const note = document.createElement('p'); note.className = 'tiny-note';
                 note.textContent = `关联文字稿片段：${(section.sourceSegmentIds || []).map(index => index + 1).join('、') || '无'}${section.needsReview ? ' · 待复核' : ''}；人工修改后原来源仅供参考。`;
-                block.append(title, input, note); sectionEditor.append(block);
+                block.append(note); sectionEditor.append(block);
             }
             const pager = document.createElement('div');
             pager.className = 'minutes-pagination';
@@ -1568,7 +1683,7 @@ async function setupMinutes(id, role, transcriptDirty) {
             message.textContent = '请先保存纪要草稿。';
             return;
         }
-        if (structured && (currentSections().some(value => !value.trim()) || currentActions().some(action => !action.content.trim())) || !structured && !editor.value.trim()) {
+        if (structured && (currentSections().some(value => value.content !== undefined ? !value.content.trim() : [...value.discussion, ...value.conclusions].some(text => !text.trim())) || currentActions().some(action => !action.content.trim())) || !structured && !editor.value.trim()) {
             message.textContent = '纪要正文不能为空。';
             return;
         }
@@ -1577,13 +1692,29 @@ async function setupMinutes(id, role, transcriptDirty) {
             return;
         }
         const payload = {outlineVersion, expectedVersion: version, confirm: confirmMinutes};
-        if (structured) payload.structured = {...structured, sections: structured.sections.map((section, index) => ({...section, content: currentSections()[index]})), actions: structured.actions.map((action, index) => ({...action, ...currentActions()[index], assignee: currentActions()[index].assignee || null, deadline: currentActions()[index].deadline || null}))};
+        if (structured) payload.structured = {...structured, sections: structured.sections.map((section, index) => {
+            const edit = currentSections()[index];
+            if (section.discussion == null) return {...section, content: edit.content};
+            return {...section, discussion: edit.discussion.map((content, i) => ({...section.discussion[i], content})), conclusions: edit.conclusions.map((content, i) => ({...section.conclusions[i], content}))};
+        }), actions: structured.actions.map((action, index) => ({...action, ...currentActions()[index], assignee: currentActions()[index].assignee || null, deadline: currentActions()[index].deadline || null}))};
         else payload.content = editor.value;
         send('', payload);
     }
 
     el('minutes-save').onclick = () => save(false);
     el('minutes-confirm').onclick = () => save(true);
+    return async () => {
+        const response = await api(`/api/meetings/${encodeURIComponent(id)}/minutes`);
+        if (!document.contains(panel)) return;
+        if (response.status === 404) return;
+        if (!response.ok) throw new Error('纪要加载失败，请稍后重试。');
+        const data = await response.json();
+        if (isDirty()) {
+            if (data.version !== version) message.textContent = '纪要已更新；当前有未保存的修改，请先处理。';
+            return;
+        }
+        render(data);
+    };
 }
 
 /** 展示系统内置的会议评测样本与预设答案。 */
@@ -1922,6 +2053,17 @@ async function setupOutline(id, role, transcriptVersion, transcriptDirty) {
 
     el('outline-save').onclick = () => save(false);
     el('outline-confirm').onclick = () => save(true);
+    return async () => {
+        let data;
+        try { data = await fetchPage(1, ''); }
+        catch (error) { if (error.status === 404) return; throw error; }
+        if (!document.contains(panel)) return;
+        if (dirty) {
+            if (data.version !== outlineVersion) message.textContent = '大纲已更新；当前有未保存的修改，请先处理。';
+            return;
+        }
+        await render(data);
+    };
 }
 
 function setupChat() {

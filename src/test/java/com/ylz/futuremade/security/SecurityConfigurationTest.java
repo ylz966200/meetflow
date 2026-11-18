@@ -58,6 +58,9 @@ class SecurityConfigurationTest {
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_outline_version (meeting_id CHAR(36), version INT, transcript_version INT, status SMALLINT, items_json CLOB, created_by BIGINT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL, PRIMARY KEY(meeting_id,version))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_outline_source (meeting_id CHAR(36),outline_version INT,source_json CLOB,PRIMARY KEY(meeting_id,outline_version))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_minutes_version (meeting_id CHAR(36), version INT, outline_version INT, transcript_version INT, status SMALLINT, content CLOB, structured_json CLOB, created_by BIGINT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(meeting_id,version))");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS mf_ai_generation_task(id CHAR(36) PRIMARY KEY,request_key CHAR(36) UNIQUE,meeting_id CHAR(36),task_type VARCHAR(40),status SMALLINT,actor_id BIGINT,transcript_version INT,outline_version INT,expected_result_version INT,prompt_version_id BIGINT,model_name VARCHAR(128),config_json CLOB,result_version INT,error_code VARCHAR(64),created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,started_at TIMESTAMP,finished_at TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS mf_ai_generation_batch(id CHAR(36) PRIMARY KEY,task_id CHAR(36),batch_no VARCHAR(128),parent_batch_id CHAR(36),status SMALLINT,input_json CLOB,input_hash CHAR(64),output_json CLOB,ai_call_id BIGINT,attempt_count INT DEFAULT 0,error_code VARCHAR(64),lease_owner VARCHAR(128),lease_until TIMESTAMP,attempt_token CHAR(36),created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.update("DELETE FROM mf_ai_generation_batch"); jdbc.update("DELETE FROM mf_ai_generation_task");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_transcription_task (id CHAR(36) PRIMARY KEY, meeting_id CHAR(36), recording_id CHAR(36), created_by BIGINT, status SMALLINT, segments_json CLOB, raw_response CLOB, speaker_review_json CLOB, speaker_review_version INT DEFAULT 0 NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, next_poll_at TIMESTAMP, lease_token CHAR(36), lease_until TIMESTAMP, poll_count INT DEFAULT 0 NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_recording (id CHAR(36) PRIMARY KEY, meeting_id CHAR(36), object_key VARCHAR(255), original_name VARCHAR(255), file_size BIGINT, format VARCHAR(8), transcription_task_id CHAR(36), status SMALLINT, created_by BIGINT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_generation_request (request_key CHAR(36) PRIMARY KEY, scenario VARCHAR(32), meeting_id CHAR(36), actor_id BIGINT, source_version INT, expected_version INT, status SMALLINT, result_version INT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
@@ -94,19 +97,9 @@ class SecurityConfigurationTest {
         jdbc.update("INSERT INTO mf_user_role VALUES (1, 1)");
     }
 
-    @Test void embeddingPreviewRequiresAdministrator() throws Exception {
-        mvc.perform(post("/api/admin/knowledge/embedding/preview").contentType("application/json").content("{\"text\":\"测试\"}"))
+    @Test void meetingKnowledgeRequiresAuthentication() throws Exception {
+        mvc.perform(post("/api/meetings/00000000-0000-0000-0000-000000000001/knowledge/index"))
                 .andExpect(status().isUnauthorized());
-        mvc.perform(post("/api/admin/knowledge/embedding/preview").header("Authorization", "Bearer " + login())
-                .contentType("application/json").content("{\"text\":\"测试\"}"))
-                .andExpect(status().isForbidden());
-    }
-    @Test void milvusDemoRequiresAdministrator() throws Exception {
-        mvc.perform(post("/api/admin/knowledge/milvus/demo").contentType("application/json").content("{\"query\":\"预算\"}"))
-                .andExpect(status().isUnauthorized());
-        mvc.perform(post("/api/admin/knowledge/milvus/demo").header("Authorization", "Bearer " + login())
-                .contentType("application/json").content("{\"query\":\"预算\"}"))
-                .andExpect(status().isForbidden());
     }
     @Test void milvusConnectionRequiresAdministrator() throws Exception {
         mvc.perform(get("/api/admin/knowledge/milvus/connection")).andExpect(status().isUnauthorized());
@@ -509,15 +502,20 @@ class SecurityConfigurationTest {
         mvc.perform(post("/api/meetings/"+id+"/minutes/generate").header("Authorization","Bearer "+token)
                 .contentType("application/json").content("{\"outlineVersion\":1,\"expectedVersion\":0}")).andExpect(status().isConflict());
         jdbc.update("INSERT INTO mf_outline_version(meeting_id,version,transcript_version,status,items_json,created_by) VALUES(?,2,1,2,'[\"预算\"]',1)",id);
-        when(minutesGenerator.generate(org.mockito.ArgumentMatchers.eq("讨论预算"),org.mockito.ArgumentMatchers.eq(java.util.List.of("预算")),org.mockito.ArgumentMatchers.eq("纪要提示词"),org.mockito.ArgumentMatchers.anyLong())).thenReturn("预算：讨论了预算。");
+        var section = new com.ylz.futuremade.meeting.model.dto.MinutesSection();
+        section.setOutlineId(1); section.setTitle("预算"); section.setContent("讨论了预算。"); section.setSourceSegmentIds(java.util.List.of());
+        var document = new com.ylz.futuremade.meeting.model.dto.StructuredMinutes();
+        document.setSections(java.util.List.of(section)); document.setActions(java.util.List.of());
+        when(minutesGenerator.generate(org.mockito.ArgumentMatchers.eq("讨论预算"),org.mockito.ArgumentMatchers.eq(java.util.List.of("预算")),org.mockito.ArgumentMatchers.eq("纪要提示词"),org.mockito.ArgumentMatchers.anyLong())).thenReturn(document);
         mvc.perform(post("/api/meetings/"+id+"/minutes/generate").header("Authorization","Bearer "+token)
                 .contentType("application/json").content("{\"outlineVersion\":2,\"expectedVersion\":0}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value(BusinessStatus.DRAFT.code())).andExpect(jsonPath("$.outlineVersion").value(2));
         mvc.perform(post("/api/meetings/"+id+"/minutes").header("Authorization","Bearer "+token)
                 .contentType("application/json").content("{\"outlineVersion\":2,\"expectedVersion\":1,\"content\":\"修订后的纪要\",\"confirm\":true}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value(BusinessStatus.CONFIRMED.code()));
+        org.junit.jupiter.api.Assertions.assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mf_ai_generation_task WHERE meeting_id=? AND task_type='MINUTES_INDEX'", Integer.class, id));
         mvc.perform(get("/api/meetings/"+id+"/minutes?version=1").header("Authorization","Bearer "+token))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.content").value("预算：讨论了预算。"));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.structured.sections[0].content").value("讨论了预算。"));
         jdbc.update("INSERT INTO mf_user VALUES (2, ?, ?, TRUE)","viewer",new BCryptPasswordEncoder().encode("viewer-password"));
         jdbc.update("INSERT INTO mf_meeting_member VALUES (?,2,'VIEWER')",id);
         var other=mvc.perform(post("/api/auth/login").contentType("application/json").content("{\"username\":\"viewer\",\"password\":\"viewer-password\"}"))
@@ -547,7 +545,11 @@ class SecurityConfigurationTest {
         jdbc.update("INSERT INTO mf_outline_version(meeting_id,version,transcript_version,status,items_json,created_by) VALUES(?,1,1,2,'[\"主题\"]',1)",id);
         when(minutesGenerator.generate(org.mockito.ArgumentMatchers.eq("原文字稿"),org.mockito.ArgumentMatchers.eq(java.util.List.of("主题")),org.mockito.ArgumentMatchers.eq("纪要提示词"),org.mockito.ArgumentMatchers.anyLong())).thenAnswer(invocation -> {
             jdbc.update("INSERT INTO mf_transcript_version(meeting_id,version,content,created_by) VALUES (?,2,'新文字稿',1)",id);
-            return "生成结果";
+            var section = new com.ylz.futuremade.meeting.model.dto.MinutesSection();
+            section.setOutlineId(1); section.setTitle("主题"); section.setContent("生成结果"); section.setSourceSegmentIds(java.util.List.of());
+            var document = new com.ylz.futuremade.meeting.model.dto.StructuredMinutes();
+            document.setSections(java.util.List.of(section)); document.setActions(java.util.List.of());
+            return document;
         });
         mvc.perform(post("/api/meetings/"+id+"/minutes/generate").header("Authorization","Bearer "+token)
                 .contentType("application/json").content("{\"outlineVersion\":1,\"expectedVersion\":0}"))

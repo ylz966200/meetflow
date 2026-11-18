@@ -200,7 +200,7 @@ public class MinutesBatchGenerator {
         }
         Set<Integer> covered = new HashSet<>();
         for (var item : result.getMinutes()) {
-            if (item == null || !covered.add(item.getOutlineId()) || item.getContent() == null || item.getContent().isBlank() || item.getNeedsReview() == null || !validSources(allowed, item.getOutlineId(), item.getSourceSegmentIds()))
+            if (item == null || !covered.add(item.getOutlineId()) || !validMinutesItem(allowed, item))
                 throw new IllegalArgumentException("纪要条目或来源无效");
         }
         if (!covered.equals(allowed.keySet())) throw new IllegalArgumentException("纪要未完整覆盖本批大纲");
@@ -211,5 +211,16 @@ public class MinutesBatchGenerator {
 
     private boolean validSources(Map<Integer, Set<Integer>> allowed, Integer outlineId, List<Integer> ids) {
         return allowed.containsKey(outlineId) && ids != null && !ids.isEmpty() && allowed.get(outlineId).containsAll(ids);
+    }
+
+    private boolean validMinutesItem(Map<Integer, Set<Integer>> allowed, MinutesBatchItem item) {
+        if (item.getDiscussion() == null && item.getConclusions() == null)
+            return item.getContent() != null && !item.getContent().isBlank() && item.getNeedsReview() != null
+                    && validSources(allowed, item.getOutlineId(), item.getSourceSegmentIds());
+        if (item.getDiscussion() == null || item.getConclusions() == null
+                || item.getDiscussion().isEmpty() && item.getConclusions().isEmpty()) return false;
+        return java.util.stream.Stream.concat(item.getDiscussion().stream(), item.getConclusions().stream())
+                .allMatch(point -> point != null && point.getContent() != null && !point.getContent().isBlank()
+                        && point.getNeedsReview() != null && validSources(allowed, item.getOutlineId(), point.getSourceSegmentIds()));
     }
 }

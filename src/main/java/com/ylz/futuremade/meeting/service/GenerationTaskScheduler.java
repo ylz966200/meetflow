@@ -6,8 +6,9 @@ import com.ylz.futuremade.meeting.enums.GenerationTaskStatus;
 import com.ylz.futuremade.meeting.mapper.AiGenerationBatchMapper;
 import com.ylz.futuremade.meeting.mapper.AiGenerationTaskMapper;
 import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
+import com.ylz.futuremade.knowledge.enums.KnowledgeTaskType;
+import com.ylz.futuremade.knowledge.service.KnowledgeIndexWorker;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -23,7 +24,6 @@ import jakarta.annotation.PreDestroy;
  * 扫描会议生成后台任务并使用租约领取批次。
  */
 @Component
-@ConditionalOnProperty(prefix = "meetflow.minutes.background", name = "enabled", havingValue = "true")
 public class GenerationTaskScheduler {
     private final AiGenerationTaskMapper tasks;
     private final AiGenerationBatchMapper batches;
@@ -31,14 +31,17 @@ public class GenerationTaskScheduler {
     private final MinutesTaskFinalizer finalizer;
     private final OutlineTaskWorker outlineWorker;
     private final OutlineTaskFinalizer outlineFinalizer;
+    private final KnowledgeIndexWorker knowledgeWorker;
     private final String owner = UUID.randomUUID().toString();
     private final Set<String> active = ConcurrentHashMap.newKeySet();
     private final ExecutorService pool;
     private final int scanSize;
+    private final boolean generationEnabled;
 
-    public GenerationTaskScheduler(AiGenerationTaskMapper tasks, AiGenerationBatchMapper batches, MinutesBatchWorker worker, MinutesTaskFinalizer finalizer, OutlineTaskWorker outlineWorker, OutlineTaskFinalizer outlineFinalizer,
+    public GenerationTaskScheduler(AiGenerationTaskMapper tasks, AiGenerationBatchMapper batches, MinutesBatchWorker worker, MinutesTaskFinalizer finalizer, OutlineTaskWorker outlineWorker, OutlineTaskFinalizer outlineFinalizer, KnowledgeIndexWorker knowledgeWorker,
                                    @Value("${meetflow.minutes.background.max-concurrent-tasks:2}") int maxConcurrent,
-                                   @Value("${meetflow.minutes.background.scan-size:20}") int scanSize) {
+                                   @Value("${meetflow.minutes.background.scan-size:20}") int scanSize,
+                                   @Value("${meetflow.minutes.background.enabled:false}") boolean generationEnabled) {
         if (maxConcurrent < 1 || scanSize < maxConcurrent || scanSize > 100)
             throw new IllegalArgumentException("后台任务并发或扫描数量配置无效");
         this.tasks = tasks;
@@ -47,8 +50,10 @@ public class GenerationTaskScheduler {
         this.finalizer = finalizer;
         this.outlineWorker = outlineWorker;
         this.outlineFinalizer = outlineFinalizer;
+        this.knowledgeWorker = knowledgeWorker;
         this.pool = Executors.newFixedThreadPool(maxConcurrent);
         this.scanSize = scanSize;
+        this.generationEnabled = generationEnabled;
     }
 
     /**
@@ -56,8 +61,11 @@ public class GenerationTaskScheduler {
      */
     @Scheduled(fixedDelayString = "${meetflow.minutes.background.poll-delay-ms:5000}", initialDelayString = "${meetflow.minutes.background.initial-delay-ms:5000}")
     public void poll() {
-        schedule(PromptScenarioCode.MEETING_MINUTES.code(), false);
-        schedule(PromptScenarioCode.MEETING_OUTLINE.code(), true);
+        if (generationEnabled) {
+            schedule(PromptScenarioCode.MEETING_MINUTES.code(), false);
+            schedule(PromptScenarioCode.MEETING_OUTLINE.code(), true);
+        }
+        schedule(KnowledgeTaskType.MINUTES_INDEX.code(), false);
     }
 
     private void schedule(String type, boolean outline) {
@@ -67,10 +75,12 @@ public class GenerationTaskScheduler {
                 try {
                     var available = batches.runnable(taskId, GenerationBatchStatus.PENDING.code(), GenerationBatchStatus.RUNNING.code(), 1);
                     if (!available.isEmpty()) {
-                        if (outline) outlineWorker.execute(available.get(0), owner);
+                        if (KnowledgeTaskType.MINUTES_INDEX.code().equals(type)) knowledgeWorker.execute(available.get(0), owner);
+                        else if (outline) outlineWorker.execute(available.get(0), owner);
                         else worker.execute(available.get(0), owner);
                     }
-                    if (outline) outlineFinalizer.finishIfReady(taskId);
+                    if (KnowledgeTaskType.MINUTES_INDEX.code().equals(type)) knowledgeWorker.finish(taskId);
+                    else if (outline) outlineFinalizer.finishIfReady(taskId);
                     else finalizer.finishIfReady(taskId);
                 } catch (Exception ex) {
                     ErrorDiagnostics.error("纪要后台任务调度失败", ex);
