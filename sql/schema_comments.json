@@ -164,6 +164,7 @@
       "transcript_version": "生成纪要使用的文字稿版本号",
       "status": "业务状态码，参见 BusinessStatus 枚举",
       "content": "会议纪要正文，属于敏感会议数据",
+      "structured_json": "按大纲组织的纪要及行动项候选 JSON，历史纯文本版本为空",
       "created_by": "版本创建人的用户 ID",
       "created_at": "纪要版本创建时间"
     }

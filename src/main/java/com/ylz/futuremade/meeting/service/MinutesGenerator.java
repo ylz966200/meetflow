@@ -7,6 +7,11 @@ import com.ylz.futuremade.prompt.service.PromptService;
 
 import java.util.List;
 import com.ylz.futuremade.meeting.model.dto.MinutesModelInput;
+import com.ylz.futuremade.meeting.model.dto.MinutesBatchResponse;
+import com.ylz.futuremade.meeting.model.dto.OutlineView;
+import com.ylz.futuremade.meeting.model.dto.StructuredMinutes;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * 根据文字稿和已确认大纲生成待审核纪要。
@@ -23,7 +28,7 @@ public class MinutesGenerator {
         this.prompts = prompts;
     }
 
-    public String generate(String transcript, List<String> outline, String systemPrompt, long callId) {
+    public StructuredMinutes generate(String transcript, List<String> outline, String systemPrompt, long callId) {
         try {
             var input = new MinutesModelInput();
             input.setConfirmedOutline(outline);
@@ -34,9 +39,33 @@ public class MinutesGenerator {
             String response = modelResponse.getResult().getOutput().getText();
             prompts.recordOutput(callId, response);
             prompts.recordMetadata(callId, modelResponse);
+            if (modelResponse.hasFinishReasons(Set.of("length", "LENGTH")))
+                throw new IllegalArgumentException("模型输出被截断");
             if (response == null || response.isBlank() || response.length() > MinutesService.MAX_CONTENT_LENGTH)
                 throw new IllegalArgumentException("纪要内容无效");
-            return response.strip();
+            var result = json.readValue(response, MinutesBatchResponse.class);
+            if (result.getMinutes() == null || result.getActions() == null)
+                throw new IllegalArgumentException("纪要结果格式无效");
+            Set<Integer> covered = new HashSet<>();
+            for (var item : result.getMinutes()) {
+                if (item.getOutlineId() == null || item.getOutlineId() < 1 || item.getOutlineId() > outline.size()
+                        || !covered.add(item.getOutlineId()) || item.getContent() == null || item.getContent().isBlank()
+                        || item.getNeedsReview() == null)
+                    throw new IllegalArgumentException("纪要条目无效");
+                // 旧文字稿没有可验证的来源编号，不保存模型虚构的编号。
+                item.setSourceSegmentIds(List.of());
+            }
+            if (covered.size() != outline.size()) throw new IllegalArgumentException("纪要未完整覆盖大纲");
+            for (var action : result.getActions()) {
+                if (action.getOutlineId() == null || !covered.contains(action.getOutlineId())
+                        || action.getContent() == null || action.getContent().isBlank() || action.getNeedsReview() == null)
+                    throw new IllegalArgumentException("行动项无效");
+                action.setSourceSegmentIds(List.of());
+            }
+            result.getMinutes().sort(java.util.Comparator.comparing(item -> item.getOutlineId()));
+            var outlineView = new OutlineView();
+            outlineView.setItems(outline);
+            return MinutesStructure.fromBatches(outlineView, result.getMinutes(), result.getActions());
         } catch (Exception ex) {
             throw new MinutesGenerationException(ex);
         }

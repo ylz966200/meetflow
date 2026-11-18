@@ -58,7 +58,7 @@ public class MinutesTaskFinalizer {
         items.sort(java.util.Comparator.comparing(MinutesBatchItem::getOutlineId));
         String content=generator.formatResult(outline,items,actions);
         if(content.length()>MinutesService.MAX_CONTENT_LENGTH) { tasks.transition(taskId,GenerationTaskStatus.RUNNING.code(),GenerationTaskStatus.PARTIAL_FAILED.code(),"OUTPUT_TOO_LONG"); return; }
-        var saved=minutes.save(task.getMeetingId(),task.getActorId(),task.getOutlineVersion(),task.getExpectedResultVersion(),content,false);
+        var saved=minutes.saveGenerated(task.getMeetingId(),task.getActorId(),task.getOutlineVersion(),task.getExpectedResultVersion(),MinutesStructure.fromBatches(outline,items,actions));
         if(tasks.complete(taskId,GenerationTaskStatus.RUNNING.code(),GenerationTaskStatus.SUCCEEDED.code(),saved.getVersion())!=1)
             throw new IllegalStateException("任务完成状态异常");
     }

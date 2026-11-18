@@ -74,4 +74,12 @@ public class GenerationResultService {
         requests.success(key, result.getVersion());
         return result;
     }
+
+    /** 原子保存结构化生成结果和请求状态。 */
+    @Transactional
+    public MinutesView structuredMinutes(String key, String meetingId, long actor, int source, int expected, com.ylz.futuremade.meeting.model.dto.StructuredMinutes document) {
+        var result = minutes.saveGenerated(meetingId, actor, source, expected, document);
+        requests.success(key, result.getVersion());
+        return result;
+    }
 }

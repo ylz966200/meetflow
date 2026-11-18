@@ -633,7 +633,7 @@ async function openMeeting(id) {
         const editor = el('transcript-content');
         el('back-meetings').addEventListener('click', () => {
             const minutesEditor = el('minutes-content');
-            const minutesDirty = minutesEditor && minutesEditor.value !== (minutesEditor.dataset.saved || '');
+            const minutesDirty = minutesEditor && (minutesEditor.dataset.structuredDirty === 'true' || minutesEditor.value !== (minutesEditor.dataset.saved || ''));
             if ((editor.value !== saved || minutesDirty) && !confirm('文字稿或纪要有未保存的内容，确定返回吗？')) return;
             navigate('meetings');
         });
@@ -1342,15 +1342,90 @@ async function setupTranscription(id, editor, transcriptVersion) {
 async function setupMinutes(id, role, transcriptDirty) {
     const panel = el('minutes-panel'), editor = el('minutes-content'), message = el('minutes-message');
     const buttons = ['minutes-generate', 'minutes-save', 'minutes-confirm'].map(el);
-    let version = 0, outlineVersion = 0, status = '', pendingGeneration = null;
+    let version = 0, outlineVersion = 0, status = '', pendingGeneration = null, structured = null, savedSections = null, savedActions = null;
+    const sectionEditor = document.createElement('div');
+    sectionEditor.className = 'minutes-sections';
+    editor.after(sectionEditor);
+    const minutesPageSize = 10;
+    let minutesPage = 0;
     if (role !== 'ORGANIZER') el('minutes-confirm').classList.add('hidden');
 
+    function currentSections() {
+        return Array.from(sectionEditor.querySelectorAll('textarea')).map(input => input.value);
+    }
+    function currentActions() {
+        return Array.from(sectionEditor.querySelectorAll('.minutes-action')).map(block => ({
+            content: block.querySelector('[data-field="content"]').value,
+            assignee: block.querySelector('[data-field="assignee"]').value,
+            deadline: block.querySelector('[data-field="deadline"]').value
+        }));
+    }
+    function isDirty() {
+        return structured ? JSON.stringify(currentSections()) !== JSON.stringify(savedSections) || JSON.stringify(currentActions()) !== JSON.stringify(savedActions)
+            : normalizeMeetingText(editor.value) !== normalizeMeetingText(editor.dataset.saved || '');
+    }
     function render(data) {
         version = data.version;
         outlineVersion = data.outlineVersion;
         status = data.status;
         editor.value = data.content;
         editor.dataset.saved = data.content;
+        editor.dataset.structuredDirty = 'false';
+        structured = data.structured || null;
+        editor.hidden = !!structured;
+        sectionEditor.replaceChildren();
+        if (structured) {
+            for (const section of structured.sections) {
+                const block = document.createElement('section'), title = document.createElement('h4'), input = document.createElement('textarea');
+                block.className = 'minutes-section';
+                title.textContent = `${section.outlineId}. ${section.title}`;
+                input.className = 'transcript-editor'; input.rows = 4; input.maxLength = MINUTES_MAX_CONTENT_LENGTH;
+                input.value = section.content; input.setAttribute('aria-label', section.title + '纪要内容');
+                input.oninput = () => { editor.dataset.structuredDirty = String(isDirty()); };
+                const note = document.createElement('p'); note.className = 'tiny-note';
+                note.textContent = `关联文字稿片段：${(section.sourceSegmentIds || []).map(index => index + 1).join('、') || '无'}${section.needsReview ? ' · 待复核' : ''}；人工修改后原来源仅供参考。`;
+                block.append(title, input, note); sectionEditor.append(block);
+            }
+            const pager = document.createElement('div');
+            pager.className = 'minutes-pagination';
+            const previous = document.createElement('button'), next = document.createElement('button'), pageInfo = document.createElement('span');
+            previous.type = next.type = 'button';
+            previous.className = next.className = 'button outline';
+            previous.textContent = '上一页'; next.textContent = '下一页';
+            pager.append(previous, pageInfo, next);
+            sectionEditor.append(pager);
+            const blocks = Array.from(sectionEditor.querySelectorAll('.minutes-section'));
+            const pageCount = Math.max(1, Math.ceil(blocks.length / minutesPageSize));
+            minutesPage = Math.min(minutesPage, pageCount - 1);
+            function showMinutesPage() {
+                blocks.forEach((block, index) => { block.hidden = Math.floor(index / minutesPageSize) !== minutesPage; });
+                pageInfo.textContent = `第 ${minutesPage + 1} / ${pageCount} 页 · 共 ${blocks.length} 条纪要`;
+                previous.disabled = minutesPage === 0;
+                next.disabled = minutesPage >= pageCount - 1;
+            }
+            previous.onclick = () => { minutesPage--; showMinutesPage(); };
+            next.onclick = () => { minutesPage++; showMinutesPage(); };
+            showMinutesPage();
+            const title = document.createElement('h4'); title.textContent = '行动项候选'; sectionEditor.append(title);
+            if (!structured.actions.length) {
+                const empty = document.createElement('p'); empty.className = 'tiny-note'; empty.textContent = '未识别到明确行动项。'; sectionEditor.append(empty);
+            }
+            for (const action of structured.actions) {
+                const block = document.createElement('div'); block.className = 'minutes-action';
+                for (const [field, label, value] of [['content', '行动内容', action.content], ['assignee', '负责人', action.assignee], ['deadline', '截止时间', action.deadline]]) {
+                    const wrapper = document.createElement('label'), input = document.createElement('input');
+                    wrapper.className = 'form-label'; wrapper.textContent = label;
+                    input.dataset.field = field; input.value = value || ''; input.maxLength = 1000;
+                    input.oninput = () => { editor.dataset.structuredDirty = String(isDirty()); };
+                    wrapper.append(input); block.append(wrapper);
+                }
+                const note = document.createElement('p'); note.className = 'tiny-note';
+                note.textContent = action.needsReview ? '待复核；人工修改后原来源仅供参考。' : '人工修改后原来源仅供参考。';
+                block.append(note); sectionEditor.append(block);
+            }
+            savedSections = currentSections();
+            savedActions = currentActions();
+        } else { savedSections = null; savedActions = null; }
         el('minutes-status').textContent = `版本 ${version} · ${status === STATUS.CONFIRMED ? '已确认' : '草稿'}${data.stale ? ' · 来源已更新' : ''}`;
     }
 
@@ -1438,7 +1513,7 @@ async function setupMinutes(id, role, transcriptDirty) {
             if(!response.ok) throw new Error('获取最新纪要失败，请重新打开会议。');
             const data = await response.json();
             if(!document.contains(panel) || data.version <= version) return;
-            if(normalizeMeetingText(editor.value) !== normalizeMeetingText(editor.dataset.saved || '')) {
+            if(isDirty()) {
                 message.textContent = '后台生成已完成；当前有未保存的修改，请复制或保存修改后重新打开会议。';
             } else {
                 render(data);
@@ -1458,7 +1533,7 @@ async function setupMinutes(id, role, transcriptDirty) {
     try { await showTask(await requestTask('/latest')); } catch(error) { taskInfo.textContent=error.message; }
     el('minutes-generate').onclick = async () => {
         if (transcriptDirty()) { message.textContent='请先保存文字稿并确认大纲。'; return; }
-        if (editor.value && !confirm('生成新草稿将替换当前未保存的内容。继续吗？')) return;
+        if (isDirty() && !confirm('生成新草稿将替换当前未保存的内容。继续吗？')) return;
         buttons.forEach(b => b.disabled=true);
         try {
             const response=await api('/api/meetings/' + encodeURIComponent(id) + '/outline');
@@ -1493,15 +1568,18 @@ async function setupMinutes(id, role, transcriptDirty) {
             message.textContent = '请先保存纪要草稿。';
             return;
         }
-        if (!editor.value.trim()) {
+        if (structured && (currentSections().some(value => !value.trim()) || currentActions().some(action => !action.content.trim())) || !structured && !editor.value.trim()) {
             message.textContent = '纪要正文不能为空。';
             return;
         }
-        if (!confirmMinutes && normalizeMeetingText(editor.value) === normalizeMeetingText(editor.dataset.saved || '')) {
+        if (!confirmMinutes && !isDirty()) {
             message.textContent = '纪要内容未变化，无需保存。';
             return;
         }
-        send('', {outlineVersion, expectedVersion: version, content: editor.value, confirm: confirmMinutes});
+        const payload = {outlineVersion, expectedVersion: version, confirm: confirmMinutes};
+        if (structured) payload.structured = {...structured, sections: structured.sections.map((section, index) => ({...section, content: currentSections()[index]})), actions: structured.actions.map((action, index) => ({...action, ...currentActions()[index], assignee: currentActions()[index].assignee || null, deadline: currentActions()[index].deadline || null}))};
+        else payload.content = editor.value;
+        send('', payload);
     }
 
     el('minutes-save').onclick = () => save(false);

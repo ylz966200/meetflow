@@ -81,8 +81,8 @@ public class MinutesController {
             if (outline.getSources() != null) {
                 try {
                     var prompt = prompts.active(PromptScenarioCode.MEETING_MINUTES.code());
-                    String content = batchGenerator.generate(outline, prompt, id, actor, principal.getName(), key);
-                    return results.minutes(key, id, actor, input.getOutlineVersion(), input.getExpectedVersion(), content);
+                    var document = batchGenerator.generateStructured(outline, prompt, id, actor, principal.getName(), key);
+                    return results.structuredMinutes(key, id, actor, input.getOutlineVersion(), input.getExpectedVersion(), document);
                 } catch (ResponseStatusException ex) {
                     throw ex;
                 } catch (Exception ex) {
@@ -94,16 +94,16 @@ public class MinutesController {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前仅支持不超过12000字符的文字稿");
             var prompt = prompts.active(PromptScenarioCode.MEETING_MINUTES.code());
             long callId = prompts.startCall(prompt, id, outline.getTranscriptVersion(), actor, key, input.getOutlineVersion()), start = System.nanoTime();
-            String content;
+            com.ylz.futuremade.meeting.model.dto.StructuredMinutes document;
             try {
-                content = generator.generate(transcript.content(), outline.getItems(), prompt.getContent(), callId);
+                document = generator.generate(transcript.content(), outline.getItems(), prompt.getContent(), callId);
             } catch (MinutesGenerator.MinutesGenerationException ex) {
                 com.ylz.futuremade.common.logging.ErrorDiagnostics.error("会议纪要生成失败", ex);
                 prompts.finishCall(callId, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000, "GENERATION_FAILED");
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "纪要生成失败，请稍后重试");
             }
             prompts.finishCall(callId, BusinessStatus.SUCCEEDED.code(), (System.nanoTime() - start) / 1_000_000, null);
-            return results.minutes(key, id, actor, input.getOutlineVersion(), input.getExpectedVersion(), content);
+            return results.structuredMinutes(key, id, actor, input.getOutlineVersion(), input.getExpectedVersion(), document);
         } catch (RuntimeException ex) {
             requests.failed(key);
             throw ex;
@@ -117,6 +117,9 @@ public class MinutesController {
     public MinutesView save(@PathVariable String id, @RequestBody SaveMinutesRequest input, Principal principal) {
         if (input.getOutlineVersion() == null || input.getExpectedVersion() == null)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "版本不能为空");
-        return minutes.save(id, meetings.userId(principal.getName()), input.getOutlineVersion(), input.getExpectedVersion(), input.getContent(), Boolean.TRUE.equals(input.getConfirm()));
+        long actor = meetings.userId(principal.getName());
+        if (input.getStructured() != null)
+            return minutes.saveStructured(id, actor, input.getOutlineVersion(), input.getExpectedVersion(), input.getStructured(), Boolean.TRUE.equals(input.getConfirm()));
+        return minutes.save(id, actor, input.getOutlineVersion(), input.getExpectedVersion(), input.getContent(), Boolean.TRUE.equals(input.getConfirm()));
     }
 }

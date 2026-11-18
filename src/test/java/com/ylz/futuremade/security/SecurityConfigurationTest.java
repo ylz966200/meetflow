@@ -57,7 +57,7 @@ class SecurityConfigurationTest {
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_meeting_member_audit (id BIGINT AUTO_INCREMENT PRIMARY KEY, meeting_id CHAR(36), actor_id BIGINT, target_id BIGINT, action VARCHAR(20), old_role VARCHAR(16), new_role VARCHAR(16))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_outline_version (meeting_id CHAR(36), version INT, transcript_version INT, status SMALLINT, items_json CLOB, created_by BIGINT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL, PRIMARY KEY(meeting_id,version))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_outline_source (meeting_id CHAR(36),outline_version INT,source_json CLOB,PRIMARY KEY(meeting_id,outline_version))");
-        jdbc.execute("CREATE TABLE IF NOT EXISTS mf_minutes_version (meeting_id CHAR(36), version INT, outline_version INT, transcript_version INT, status SMALLINT, content CLOB, created_by BIGINT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(meeting_id,version))");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS mf_minutes_version (meeting_id CHAR(36), version INT, outline_version INT, transcript_version INT, status SMALLINT, content CLOB, structured_json CLOB, created_by BIGINT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(meeting_id,version))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_transcription_task (id CHAR(36) PRIMARY KEY, meeting_id CHAR(36), recording_id CHAR(36), created_by BIGINT, status SMALLINT, segments_json CLOB, raw_response CLOB, speaker_review_json CLOB, speaker_review_version INT DEFAULT 0 NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, next_poll_at TIMESTAMP, lease_token CHAR(36), lease_until TIMESTAMP, poll_count INT DEFAULT 0 NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_recording (id CHAR(36) PRIMARY KEY, meeting_id CHAR(36), object_key VARCHAR(255), original_name VARCHAR(255), file_size BIGINT, format VARCHAR(8), transcription_task_id CHAR(36), status SMALLINT, created_by BIGINT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_generation_request (request_key CHAR(36) PRIMARY KEY, scenario VARCHAR(32), meeting_id CHAR(36), actor_id BIGINT, source_version INT, expected_version INT, status SMALLINT, result_version INT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
@@ -558,6 +558,33 @@ class SecurityConfigurationTest {
         org.junit.jupiter.api.Assertions.assertEquals(BusinessStatus.SUCCEEDED.code(),call.getStatus());
         org.junit.jupiter.api.Assertions.assertEquals(BusinessStatus.FAILED.code(),call.getBusinessStatus());
         org.junit.jupiter.api.Assertions.assertNull(call.getResultVersion());
+    }
+
+    @Test void structuredMinutesSaveUserEditsAndPreserveHistoricalSources() throws Exception {
+        String token = login();
+        var response = mvc.perform(post("/api/meetings").header("Authorization", "Bearer " + token)
+                .contentType("application/json").content("{\"title\":\"结构化纪要\"}"))
+                .andExpect(status().isCreated()).andReturn().getResponse();
+        String id = new ObjectMapper().readTree(response.getContentAsString()).get("id").asText();
+        jdbc.update("INSERT INTO mf_transcript_version(meeting_id,version,content,created_by) VALUES (?,1,'原文字稿',1)", id);
+        jdbc.update("INSERT INTO mf_outline_version(meeting_id,version,transcript_version,status,items_json,created_by) VALUES(?,1,1,2,'[\"预算\"]',1)", id);
+        String original = "{\"sections\":[{\"outlineId\":1,\"title\":\"预算\",\"content\":\"预算十万\",\"sourceSegmentIds\":[2],\"needsReview\":false}],\"actions\":[{\"outlineId\":1,\"content\":\"核对预算\",\"assignee\":\"小王\",\"deadline\":null,\"sourceSegmentIds\":[2],\"needsReview\":false}]}";
+        jdbc.update("INSERT INTO mf_minutes_version(meeting_id,version,outline_version,transcript_version,status,content,structured_json,created_by) VALUES(?,1,1,1,1,'原纪要',?,1)", id, original);
+        String edited = "{\"outlineVersion\":1,\"expectedVersion\":1,\"confirm\":false,\"structured\":{\"sections\":[{\"outlineId\":1,\"title\":\"伪造标题\",\"content\":\"预算八万\",\"sourceSegmentIds\":[999],\"needsReview\":false}],\"actions\":[{\"outlineId\":1,\"content\":\"核对预算\",\"assignee\":\"小李\",\"sourceSegmentIds\":[999],\"needsReview\":false}]}}";
+        mvc.perform(post("/api/meetings/" + id + "/minutes").header("Authorization", "Bearer " + token).contentType("application/json").content(edited))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.version").value(2))
+                .andExpect(jsonPath("$.structured.sections[0].title").value("预算"))
+                .andExpect(jsonPath("$.structured.sections[0].content").value("预算八万"))
+                .andExpect(jsonPath("$.structured.sections[0].sourceSegmentIds[0]").value(2))
+                .andExpect(jsonPath("$.structured.sections[0].needsReview").value(true))
+                .andExpect(jsonPath("$.structured.actions[0].assignee").value("小李"))
+                .andExpect(jsonPath("$.structured.actions[0].needsReview").value(true));
+        mvc.perform(get("/api/meetings/" + id + "/minutes?version=1").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.structured.sections[0].content").value("预算十万"));
+        String confirm = edited.replace("\"expectedVersion\":1", "\"expectedVersion\":2").replace("\"confirm\":false", "\"confirm\":true");
+        mvc.perform(post("/api/meetings/" + id + "/minutes").header("Authorization", "Bearer " + token).contentType("application/json").content(confirm))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.version").value(3)).andExpect(jsonPath("$.status").value(2))
+                .andExpect(jsonPath("$.structured.sections[0].content").value("预算八万"));
     }
 
     @Test void unchangedSavesDoNotCreateVersionsButConfirmStillDoes() throws Exception {
