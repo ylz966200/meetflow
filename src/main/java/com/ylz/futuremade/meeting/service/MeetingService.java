@@ -36,6 +36,13 @@ public class MeetingService {
         return account.id();
     }
 
+    /** 返回当前用户有权访问的会议名称。 */
+    public String title(String meetingId, long actor) {
+        var meeting = meetings.find(meetingId, actor);
+        if (meeting == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "会议不存在或无权访问");
+        return meeting.title();
+    }
+
     public List<String> searchUsers(String meetingId, long actor, String query) {
         Long owner = meetings.owner(meetingId);
         if (owner == null || owner != actor)

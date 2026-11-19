@@ -23,4 +23,8 @@ public class KnowledgeQuestion {
     private Integer minutesVersion;
     /** 是否跳过已有缓存重新生成。 */
     private Boolean bypassCache;
+    /** 第二场会议 ID，单会议问答时为空。 */
+    private String secondMeetingId;
+    /** 第二场会议的纪要版本，首次提问时可为空。 */
+    private Integer secondMinutesVersion;
 }

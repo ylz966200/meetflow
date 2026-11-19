@@ -98,7 +98,9 @@ public class MeetingKnowledgeService {
         return answer(meetingId, actor, question, conversationId, expectedVersion, false);
     }
 
-    /** 结合会话改写问题后，按权限范围查找可复用的缓存。 */
+    /**
+     * 结合会话改写问题后，按权限范围查找可复用的缓存。
+     */
     public KnowledgeAnswer answer(String meetingId, long actor, String question, String conversationId, Integer expectedVersion, boolean bypassCache) throws Exception {
         if (question == null || question.isBlank() || question.length() > 1000)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "问题不能为空且不能超过 1000 字符");
@@ -171,6 +173,122 @@ public class MeetingKnowledgeService {
         return answer != null && answer.getMinutesVersion() == view.getVersion()
                 && answer.getAnswer() != null && !answer.getAnswer().isBlank()
                 && answer.getSources() != null && !answer.getSources().isEmpty();
+    }
+
+    /**
+     * 固定两场会议的纪要版本，分别召回来源并生成一次回答。
+     */
+    public KnowledgeAnswer answerBetween(String firstId, String firstTitle, String secondId, String secondTitle,
+                                         long actor, KnowledgeQuestion input) throws Exception {
+        String question = input.getQuestion();
+        if (question == null || question.isBlank() || question.length() > 1000)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "问题不能为空且不能超过 1000 字符");
+        var first = confirmed(firstId, actor);
+        var second = confirmed(secondId, actor);
+        if ((input.getMinutesVersion() != null && !input.getMinutesVersion().equals(first.getVersion()))
+                || (input.getSecondMinutesVersion() != null && !input.getSecondMinutesVersion().equals(second.getVersion())))
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "会议纪要版本已变化，请清空对话后重新提问");
+        String scope = meetingScope(firstId, first.getVersion(), secondId, second.getVersion());
+        String memoryKey = memoryKey(scope, actor, 0, input.getConversationId());
+        var context = recentTurns(memoryKey);
+        var prompt = prompts.active(PromptScenarioCode.MEETING_KNOWLEDGE_CROSS_QA.code());
+        String requestKey = UUID.randomUUID().toString();
+        String retrievalQuestion = question;
+        if (!context.isEmpty()) {
+            var rewritePrompt = prompts.active(PromptScenarioCode.MEETING_KNOWLEDGE_QUERY_REWRITE.code());
+            var audit = new AiCallContext(rewritePrompt, firstId, first.getTranscriptVersion(), actor, requestKey, first.getOutlineVersion());
+            List<Message> history = new ArrayList<>();
+            for (var turn : context) {
+                history.add(new UserMessage(turn.getQuestion()));
+                history.add(new AssistantMessage(turn.getAnswer()));
+            }
+            retrievalQuestion = CompressionQueryTransformer.builder().chatClientBuilder(model.clientBuilder(audit))
+                    .promptTemplate(new PromptTemplate(rewritePrompt.getContent())).build()
+                    .transform(Query.builder().text(question).history(history).build()).text();
+        }
+        checkUnchanged(firstId, actor, first);
+        checkUnchanged(secondId, actor, second);
+        String cacheKey = cache.key(scope, actor, 0, prompt.getId(), modelId, retrievalQuestion);
+        if (!Boolean.TRUE.equals(input.getBypassCache())) {
+            var cached = cache.get(cacheKey);
+            if (cached != null && cached.getAnswer() != null && !cached.getAnswer().isBlank()
+                    && cached.getSources() != null
+                    && cached.getSources().stream().anyMatch(s -> firstId.equals(s.getMeetingId()) && Objects.equals(first.getVersion(), s.getMinutesVersion()))
+                    && cached.getSources().stream().anyMatch(s -> secondId.equals(s.getMeetingId()) && Objects.equals(second.getVersion(), s.getMinutesVersion()))) {
+                checkUnchanged(firstId, actor, first);
+                checkUnchanged(secondId, actor, second);
+                cached.setMinutesVersion(first.getVersion());
+                cached.setSecondMinutesVersion(second.getVersion());
+                cached.setCached(true);
+                memory.add(memoryKey, List.of(new UserMessage(question), new AssistantMessage(cached.getAnswer())));
+                return cached;
+            }
+        }
+        float[] query = embedding().embed(retrievalQuestion);
+        var sources = new ArrayList<KnowledgeSource>();
+        addSources(sources, firstId, firstTitle, first, query);
+        if (sources.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "第一场会议没有检索到相关纪要");
+        int firstCount = sources.size();
+        addSources(sources, secondId, secondTitle, second, query);
+        if (sources.size() == firstCount)
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "第二场会议没有检索到相关纪要");
+        checkUnchanged(firstId, actor, first);
+        checkUnchanged(secondId, actor, second);
+        var modelInput = new KnowledgeQuestionInput();
+        modelInput.setQuestion(retrievalQuestion);
+        modelInput.setHistory(List.of());
+        modelInput.setSources(sources);
+        var audit = new AiCallContext(prompt, firstId, first.getTranscriptVersion(), actor, requestKey, first.getOutlineVersion());
+        var response = model.call(audit, json.writeValueAsString(modelInput));
+        String output = response.getResult().getOutput().getText();
+        if (response.hasFinishReasons(Set.of("length", "LENGTH")) || output == null || output.isBlank())
+            throw new IllegalStateException("问答结果为空或被截断");
+        checkUnchanged(firstId, actor, first);
+        checkUnchanged(secondId, actor, second);
+        memory.add(memoryKey, List.of(new UserMessage(question), new AssistantMessage(output.strip())));
+        var answer = new KnowledgeAnswer();
+        answer.setMinutesVersion(first.getVersion());
+        answer.setSecondMinutesVersion(second.getVersion());
+        answer.setAnswer(output.strip());
+        answer.setSources(sources);
+        cache.put(cacheKey, answer);
+        return answer;
+    }
+
+    private void addSources(List<KnowledgeSource> sources, String meetingId, String title, MinutesView view, float[] query) throws Exception {
+        var hits = vectors.search(collection(query.length), marker(query.length), meetingId, view.getVersion(), query, 3);
+        for (var hit : hits) {
+            int index = ((Number) hit.get("section_index")).intValue();
+            var section = view.getStructured().getSections().get(index);
+            var source = new KnowledgeSource();
+            source.setMeetingId(meetingId);
+            source.setMeetingTitle(title);
+            source.setMinutesVersion(view.getVersion());
+            source.setSectionIndex(index);
+            source.setTitle(section.getTitle());
+            source.setContent(MinutesStructure.sectionContent(section));
+            source.setScore(hit.getScore());
+            sources.add(source);
+        }
+    }
+
+    /**
+     * 按相同的会议顺序和版本清除跨会议会话记忆。
+     */
+    public void clearBetween(String firstId, String secondId, long actor, int firstVersion, int secondVersion, String conversationId) {
+        minutes.get(firstId, actor, null);
+        minutes.get(secondId, actor, null);
+        String scope = meetingScope(firstId, firstVersion, secondId, secondVersion);
+        memory.clear(memoryKey(scope, actor, 0, conversationId));
+    }
+
+    /**
+     * 按会议 ID 固定顺序，保证选择顺序不同仍使用相同的来源范围。
+     */
+    private String meetingScope(String firstId, int firstVersion, String secondId, int secondVersion) {
+        return firstId.compareTo(secondId) < 0
+                ? firstId + ":" + firstVersion + ":" + secondId + ":" + secondVersion
+                : secondId + ":" + secondVersion + ":" + firstId + ":" + firstVersion;
     }
 
     private KnowledgeAnswer reuse(KnowledgeAnswer answer, String meetingId, long actor, MinutesView view,

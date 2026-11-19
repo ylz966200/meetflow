@@ -9,6 +9,12 @@ import lombok.Setter;
 @Getter
 @Setter
 public class KnowledgeSource {
+    /** 来源会议 ID。 */
+    private String meetingId;
+    /** 来源会议名称。 */
+    private String meetingTitle;
+    /** 来源纪要版本。 */
+    private Integer minutesVersion;
     /**
      * 纪要条目序号，从零开始。
      */
