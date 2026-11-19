@@ -130,8 +130,17 @@ async function setupKnowledge() {
     const root = el('content');
     root.innerHTML = `<div class="page-heading"><div><div class="section-kicker">KNOWLEDGE</div><h1>会议知识库</h1><p class="subtitle">选择会议，基于已确认纪要对话并追溯参考内容。</p></div></div><section class="panel"><label class="form-label">选择会议<select id="knowledge-meeting"><option value="">正在加载会议…</option></select></label><div class="meeting-pages"><button class="button outline" id="knowledge-prev">上一页</button><span id="knowledge-page"></span><button class="button outline" id="knowledge-next">下一页</button></div><p id="knowledge-status" class="tiny-note" role="status"></p><button type="button" class="button outline" id="knowledge-index" hidden>为历史纪要建立索引</button><button type="button" class="button outline" id="knowledge-retry" hidden>重试索引</button><div class="knowledge-chat"><div class="knowledge-chat-header"><div><strong>会议知识问答</strong><p class="tiny-note">记住本页面各会议最近四轮对话；刷新或离开后清除。</p></div><button type="button" class="button outline" id="knowledge-clear">清空对话</button></div><div id="knowledge-result" class="knowledge-chat-messages" role="log" aria-live="polite"></div><form id="knowledge-form" class="knowledge-compose"><label class="form-label" for="knowledge-question">输入问题</label><textarea id="knowledge-question" maxlength="1000" rows="2" placeholder="例如：会议确定了哪些事项？"></textarea><div><span class="tiny-note">Enter 发送，Shift + Enter 换行</span><button type="submit" class="button primary" id="knowledge-ask">发送</button></div></form></div></section>`;
     const select = el('knowledge-meeting'), status = el('knowledge-status'), retry = el('knowledge-retry'), result = el('knowledge-result');
+    const bypassLabel = document.createElement('label'); bypassLabel.className = 'tiny-note';
+    const bypassCache = document.createElement('input'); bypassCache.type = 'checkbox';
+    bypassLabel.append(bypassCache, document.createTextNode(' 跳过缓存重新生成'));
+    el('knowledge-form').querySelector('div').prepend(bypassLabel);
     let page = 1, statusTimer, chatEpoch = 0;
     const conversations = new Map();
+    const conversationIds = new Map();
+    function conversationId(id) {
+        if (!conversationIds.has(id)) conversationIds.set(id, crypto.randomUUID());
+        return conversationIds.get(id);
+    }
     function renderConversation() {
         result.replaceChildren();
         const turns = conversations.get(select.value) || [];
@@ -139,6 +148,7 @@ async function setupKnowledge() {
         for (const turn of turns) {
             const user = document.createElement('div'); user.className = 'message user'; user.textContent = turn.question; result.append(user);
             const reply = document.createElement('div'); reply.className = 'message assistant'; reply.textContent = turn.answer; result.append(reply);
+            if (turn.cached) { const badge = document.createElement('p'); badge.className = 'tiny-note'; badge.textContent = '已复用缓存回答'; reply.append(badge); }
             if (turn.sources?.length) {
                 const details = document.createElement('details'); details.className = 'knowledge-sources';
                 const summary = document.createElement('summary'); summary.textContent = `查看参考纪要（版本 ${turn.minutesVersion} · ${turn.sources.length} 条）`;
@@ -179,7 +189,7 @@ async function setupKnowledge() {
         const data = await response.json();
         const previous = conversations.get(id);
         if (previous?.length && previous[0].minutesVersion !== data.minutesVersion) {
-            conversations.delete(id); chatEpoch++; renderConversation();
+            conversations.delete(id); conversationIds.delete(id); chatEpoch++; renderConversation();
         }
         const states = {1: '等待执行', 2: '索引中', 4: '已完成', 5: '失败'};
         status.textContent = `纪要版本 ${data.minutesVersion}：${states[data.status] || '未知状态'}${data.status === 5 ? '，请检查服务配置后重试。' : ''}`;
@@ -188,7 +198,17 @@ async function setupKnowledge() {
             statusTimer = setTimeout(() => { if (document.contains(select)) showStatus().catch(() => status.textContent = '索引状态加载失败。'); }, 5000);
     }
     select.onchange = () => { chatEpoch++; renderConversation(); showStatus().catch(() => status.textContent = '索引状态加载失败。'); };
-    el('knowledge-clear').onclick = () => { if (!select.value) return; conversations.delete(select.value); chatEpoch++; renderConversation(); };
+    el('knowledge-clear').onclick = async () => {
+        const id = select.value, turns = conversations.get(id) || [];
+        if (!id) return;
+        if (turns.length && conversationIds.has(id)) {
+            try {
+                const response = await api(`/api/meetings/${encodeURIComponent(id)}/knowledge/memory/clear`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({conversationId: conversationIds.get(id), minutesVersion: turns[0].minutesVersion})});
+                if (!response.ok) throw new Error('清空会话记忆失败，请稍后重试。');
+            } catch (error) { status.textContent = error.message; return; }
+        }
+        conversations.delete(id); conversationIds.delete(id); chatEpoch++; renderConversation();
+    };
     el('knowledge-index').onclick = async function () {
         const id = select.value; this.disabled = true;
         try {
@@ -213,19 +233,20 @@ async function setupKnowledge() {
         const button = el('knowledge-ask'), epoch = chatEpoch;
         if (button.disabled) return;
         const turns = conversations.get(id) || [];
-        const history = turns.slice(-4).map(turn => ({question: turn.question, answer: turn.answer.slice(0, 2000)}));
+        const session = conversationId(id);
         button.disabled = true;
         result.querySelector('.knowledge-empty')?.remove();
         const pendingQuestion = document.createElement('div'); pendingQuestion.className = 'message user'; pendingQuestion.textContent = question;
         const pending = document.createElement('div'); pending.className = 'message assistant'; pending.textContent = '正在检索并生成回答……'; result.append(pendingQuestion, pending); result.scrollTop = result.scrollHeight;
         try {
-            const response = await api(`/api/meetings/${encodeURIComponent(id)}/knowledge/answer`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question, history, minutesVersion: turns[0]?.minutesVersion || null})});
+            const response = await api(`/api/meetings/${encodeURIComponent(id)}/knowledge/answer`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question, conversationId: session, minutesVersion: turns[0]?.minutesVersion || null, bypassCache: bypassCache.checked})});
             const data = await response.json();
             if (!response.ok) throw new Error(data.message || '问答失败，请检查权限和索引状态。');
-            if (!document.contains(select) || select.value !== id || epoch !== chatEpoch) return;
-            if (turns.length && turns[0].minutesVersion !== data.minutesVersion) { conversations.delete(id); status.textContent = '纪要版本已变化，之前的对话已清除，请重新提问。'; renderConversation(); return; }
-            turns.push({question, answer: data.answer, minutesVersion: data.minutesVersion, sources: data.sources});
-            conversations.set(id, turns); el('knowledge-question').value = ''; renderConversation();
+            if (!document.contains(select) || conversationIds.get(id) !== session) return;
+            if (turns.length && turns[0].minutesVersion !== data.minutesVersion) { conversations.delete(id); conversationIds.delete(id); status.textContent = '纪要版本已变化，之前的对话已清除，请重新提问。'; renderConversation(); return; }
+            turns.push({question, answer: data.answer, minutesVersion: data.minutesVersion, sources: data.sources, cached: data.cached});
+            conversations.set(id, turns);
+            if (select.value === id) { el('knowledge-question').value = ''; renderConversation(); }
         } catch (error) { if (document.contains(select) && select.value === id && epoch === chatEpoch) { pending.textContent = error.message; pending.classList.add('knowledge-error'); } }
         finally { if (document.contains(button)) button.disabled = false; }
     };

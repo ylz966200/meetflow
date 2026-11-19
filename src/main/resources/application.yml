@@ -1,4 +1,10 @@
 spring:
+  data:
+    redis:
+      host: ${MEETFLOW_REDIS_HOST:127.0.0.1}
+      port: ${MEETFLOW_REDIS_PORT:6379}
+      password: ${MEETFLOW_REDIS_PASSWORD:}
+      timeout: ${MEETFLOW_REDIS_TIMEOUT:2s}
   servlet:
     multipart:
       max-file-size: 100MB
@@ -20,6 +26,9 @@ mybatis:
     log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
 
 meetflow:
+  knowledge-cache:
+    enabled: ${MEETFLOW_KNOWLEDGE_CACHE_ENABLED:true}
+    ttl: ${MEETFLOW_KNOWLEDGE_CACHE_TTL:24h}
   knowledge:
     milvus:
       # 仅在需要连接 Zilliz Cloud 时启用；Endpoint 使用 HTTPS 完整地址。

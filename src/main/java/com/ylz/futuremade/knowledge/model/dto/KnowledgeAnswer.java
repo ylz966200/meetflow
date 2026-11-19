@@ -13,4 +13,6 @@ public class KnowledgeAnswer {
     private String answer;
     /** 本次提供给模型的参考纪要条目。 */
     private List<KnowledgeSource> sources;
+    /** 是否复用了已缓存的回答。 */
+    private boolean cached;
 }

@@ -14,11 +14,13 @@ public class KnowledgeQuestion {
      */
     private String question;
     /**
-     * 同一会议最近几轮问答，不含当前问题。
+     * 当前页面会话的随机标识，后端结合用户、会议和版本隔离记忆。
      */
-    private java.util.List<KnowledgeConversationTurn> history;
+    private String conversationId;
     /**
      * 历史对话使用的纪要版本；有历史时须与当前纪要版本一致。
      */
     private Integer minutesVersion;
+    /** 是否跳过已有缓存重新生成。 */
+    private Boolean bypassCache;
 }

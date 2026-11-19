@@ -65,12 +65,24 @@ public class MeetingKnowledgeController {
     public KnowledgeAnswer answer(@PathVariable String id, @RequestBody KnowledgeQuestion input, Principal principal) throws Exception {
         long actor = meetings.userId(principal.getName());
         var view = minutes.get(id, actor, null);
-        if (input.getHistory() != null && !input.getHistory().isEmpty() && !view.getVersion().equals(input.getMinutesVersion()))
+        if (input.getMinutesVersion() != null && !view.getVersion().equals(input.getMinutesVersion()))
             throw new ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT, "纪要版本已变化，请清空对话后重新提问");
         var task = tasks.latest(id);
         if (task == null || view.getVersion() != tasks.version(task) || task.getStatus() != GenerationTaskStatus.SUCCEEDED.code())
             throw new ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT, "当前纪要索引尚未完成，请先查看索引状态");
-        return knowledge.answer(id, actor, input.getQuestion(), input.getHistory(), view.getVersion());
+        return knowledge.answer(id, actor, input.getQuestion(), input.getConversationId(), view.getVersion(), Boolean.TRUE.equals(input.getBypassCache()));
+    }
+
+    /**
+     * 清除当前用户在指定会议和纪要版本下的短期会话记忆。
+     */
+    @PostMapping("/memory/clear")
+    public void clearMemory(@PathVariable String id, @RequestBody KnowledgeQuestion input, Principal principal) {
+        long actor = meetings.userId(principal.getName());
+        meetings.requireOutlineEditor(id, actor, false);
+        if (input.getMinutesVersion() == null || input.getMinutesVersion() < 1)
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "纪要版本无效");
+        knowledge.clearMemory(id, actor, input.getMinutesVersion(), input.getConversationId());
     }
 
     /**
