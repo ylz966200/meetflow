@@ -1,5 +1,7 @@
 package com.ylz.futuremade.meeting.service;
 
+import com.ylz.futuremade.assistant.model.dto.AiCallContext;
+
 import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -75,22 +77,17 @@ public class ChunkExtractionService {
         } catch (DuplicateKeyException ex) {
             return replay(extractions.find(key), meetingId, taskId, chunkIndex, actor, input.getSpeakerReviewVersion());
         }
-        Long callId = null;
-        long start = System.nanoTime();
+        var audit = new AiCallContext(prompt, meetingId, null, actor, key, null);
         try {
-            callId = prompts.startCall(prompt, meetingId, null, actor, key, null);
-            var result = agent.extract(context, prompt.getContent(), callId, username);
-            result.setAiCallId(callId);
+            var result = agent.extract(context, audit, username);
+            result.setAiCallId(audit.getLastCallId());
             String resultJson = json.writeValueAsString(result);
-            if (extractions.finish(key, BusinessStatus.SUCCEEDED.code(), callId, resultJson) != 1)
+            if (extractions.finish(key, BusinessStatus.SUCCEEDED.code(), audit.getLastCallId(), resultJson) != 1)
                 throw new IllegalStateException("提取记录状态异常");
-            prompts.finishCall(callId, BusinessStatus.SUCCEEDED.code(), (System.nanoTime() - start) / 1_000_000, null);
             return result;
         } catch (Exception ex) {
             com.ylz.futuremade.common.logging.ErrorDiagnostics.error("会议分段提取失败", ex);
-            if (callId != null)
-                prompts.finishCall(callId, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000, "EXTRACTION_FAILED");
-            extractions.finish(key, BusinessStatus.FAILED.code(), callId, null);
+            extractions.finish(key, BusinessStatus.FAILED.code(), audit.getLastCallId(), null);
             if (ex instanceof ResponseStatusException statusException) throw statusException;
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "分段提取失败，请检查模型及提示词配置后重试");
         }

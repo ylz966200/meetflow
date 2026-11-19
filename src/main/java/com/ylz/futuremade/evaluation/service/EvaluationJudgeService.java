@@ -1,8 +1,9 @@
 package com.ylz.futuremade.evaluation.service;
 
+import com.ylz.futuremade.assistant.model.dto.AiCallContext;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.assistant.service.AiModelGateway;
-import com.ylz.futuremade.common.enums.BusinessStatus;
 import com.ylz.futuremade.evaluation.model.dto.EvaluationJudgeInput;
 import com.ylz.futuremade.evaluation.model.dto.EvaluationJudgeRequest;
 import com.ylz.futuremade.evaluation.model.dto.EvaluationJudgeResponse;
@@ -46,27 +47,21 @@ public class EvaluationJudgeService {
                 .findFirst().orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "评测样本不存在"));
         var prompt = ensureAvailable();
 
-        long callId = prompts.startCall(prompt, null, null, actor, null, null);
-        long started = System.currentTimeMillis();
+        var audit = new AiCallContext(prompt, null, null, actor, null, null);
         try {
             var input = new EvaluationJudgeInput();
             input.setSample(sample);
             input.setActualOutput(request.getActualOutput());
             String content = json.writeValueAsString(input);
-            prompts.recordInput(callId, prompt.getContent(), content);
-            var result = models.call(judgeModel, prompt.getContent(), content);
+            var result = models.call(judgeModel, audit, content);
             String output = result.getResult().getOutput().getText();
-            prompts.recordOutput(callId, output);
-            prompts.recordMetadata(callId, result, "火山方舟");
             if (output == null || output.isBlank() || result.hasFinishReasons(Set.of("length", "LENGTH")))
                 throw new IllegalStateException("评审结果为空或被截断");
-            prompts.finishCall(callId, BusinessStatus.SUCCEEDED.code(), System.currentTimeMillis() - started, null);
             var response = new EvaluationJudgeResponse();
-            response.setCallId(callId);
+            response.setCallId(audit.getLastCallId());
             response.setReview(output);
             return response;
         } catch (Exception ex) {
-            prompts.finishCall(callId, BusinessStatus.FAILED.code(), System.currentTimeMillis() - started, "EVALUATION_FAILED");
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "豆包评审失败，请查看调用记录", ex);
         }
     }
@@ -79,4 +74,3 @@ public class EvaluationJudgeService {
         }
         return prompts.active(PromptScenarioCode.EVALUATION_JUDGE.code());
     }}
-

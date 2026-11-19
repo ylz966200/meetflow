@@ -1,9 +1,10 @@
 package com.ylz.futuremade.meeting.service;
 
+import com.ylz.futuremade.assistant.model.dto.AiCallContext;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.assistant.service.AiModelGateway;
 import org.springframework.stereotype.Component;
-import com.ylz.futuremade.prompt.service.PromptService;
 
 import java.util.List;
 import com.ylz.futuremade.meeting.model.dto.MinutesModelInput;
@@ -20,25 +21,20 @@ import java.util.Set;
 public class MinutesGenerator {
     private final AiModelGateway model;
     private final ObjectMapper json;
-    private final PromptService prompts;
 
-    public MinutesGenerator(AiModelGateway model, ObjectMapper json, PromptService prompts) {
+    public MinutesGenerator(AiModelGateway model, ObjectMapper json) {
         this.model = model;
         this.json = json;
-        this.prompts = prompts;
     }
 
-    public StructuredMinutes generate(String transcript, List<String> outline, String systemPrompt, long callId) {
+    public StructuredMinutes generate(String transcript, List<String> outline, AiCallContext audit) {
         try {
             var input = new MinutesModelInput();
             input.setConfirmedOutline(outline);
             input.setTranscript(transcript);
             String data = json.writeValueAsString(input);
-            prompts.recordInput(callId, systemPrompt, data);
-            var modelResponse = model.call(systemPrompt, data);
+            var modelResponse = model.call(audit, data);
             String response = modelResponse.getResult().getOutput().getText();
-            prompts.recordOutput(callId, response);
-            prompts.recordMetadata(callId, modelResponse);
             if (modelResponse.hasFinishReasons(Set.of("length", "LENGTH")))
                 throw new IllegalArgumentException("模型输出被截断");
             if (response == null || response.isBlank() || response.length() > MinutesService.MAX_CONTENT_LENGTH)

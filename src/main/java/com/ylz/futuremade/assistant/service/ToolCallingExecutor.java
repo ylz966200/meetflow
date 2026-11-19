@@ -1,5 +1,7 @@
 package com.ylz.futuremade.assistant.service;
 
+import com.ylz.futuremade.assistant.model.dto.AiCallContext;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import org.slf4j.Logger;
@@ -10,6 +12,9 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
+import com.ylz.futuremade.meeting.model.dto.ExtractionToolTrace;
+import com.ylz.futuremade.prompt.service.PromptService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -21,7 +26,12 @@ public class ToolCallingExecutor {
     private static final Logger log = LoggerFactory.getLogger(ToolCallingExecutor.class);
     private final AiModelGateway models;
 
-    public ToolCallingExecutor(AiModelGateway models) {
+    private final PromptService prompts;
+    private final ObjectMapper json;
+
+    public ToolCallingExecutor(AiModelGateway models, PromptService prompts, ObjectMapper json) {
+        this.prompts = prompts;
+        this.json = json;
         this.models = models;
     }
 
@@ -30,21 +40,22 @@ public class ToolCallingExecutor {
         void accept(AssistantMessage.ToolCall call, String result) throws Exception;
     }
 
-    public String execute(String system, String content, ToolCallback[] callbacks, int maxCalls, ToolResultHandler handler) throws Exception {
+    public String execute(AiCallContext audit, String content, ToolCallback[] callbacks, int maxCalls, ToolResultHandler handler) throws Exception {
         var options = ToolCallingChatOptions.builder().toolCallbacks(callbacks).internalToolExecutionEnabled(false).build();
         var byName = Arrays.stream(callbacks).collect(Collectors.toMap(c -> c.getToolDefinition().name(), c -> c));
         List<Message> messages = new ArrayList<>();
-        messages.add(new SystemMessage(system));
+        messages.add(new SystemMessage(audit.getPrompt().getContent()));
         messages.add(new UserMessage(content));
         int count = 0;
         while (true) {
-            var response = models.call(new Prompt(messages, options));
+            var response = models.call(audit, new Prompt(messages, options));
             if (response.hasFinishReasons(Set.of("length", "LENGTH")))
                 throw new ModelOutputTruncatedException();
             if (!response.hasToolCalls()) return response.getResult().getOutput().getText();
             var assistant = response.getResult().getOutput();
             messages.add(assistant);
             List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>();
+            var traces = new ArrayList<ExtractionToolTrace>();
             for (var call : assistant.getToolCalls()) {
                 var callback = byName.get(call.name());
                 if (callback == null) throw new IllegalStateException("模型请求了未授权的工具");
@@ -64,6 +75,13 @@ public class ToolCallingExecutor {
                     result = "工具参数格式无效（字段：" + field + "）。请按照工具参数定义传入正确的 JSON 类型；整数编号必须是单个数字，不要使用范围或说明文字。";
                     validArguments = false;
                 }
+                var trace = new ExtractionToolTrace();
+                trace.setCallId(call.id());
+                trace.setName(call.name());
+                trace.setArguments(call.arguments());
+                trace.setResult(result);
+                traces.add(trace);
+                prompts.recordToolTrace(audit.getLastCallId(), json.writeValueAsString(traces));
                 if (validArguments) handler.accept(call, result);
                 responses.add(new ToolResponseMessage.ToolResponse(call.id(), call.name(), result));
             }

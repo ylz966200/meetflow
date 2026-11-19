@@ -2260,7 +2260,7 @@ async function setupPrompts() {
             callList.replaceChildren();
             if (!calls.length) callList.textContent = '暂无调用记录';
             calls.forEach(x => {
-                const item = row(callList, `${x.createdAt || ''} · ${x.scenario} · ${x.provider || '供应商未知'}/${x.modelName || '模型未知'} · 提示词版本 ID ${x.promptVersionId} · 模型 ${STATUS_LABEL[x.status] || x.status} · 业务 ${STATUS_LABEL[x.businessStatus] || '历史数据未知'}${x.resultVersion != null ? ' · 产物版本 ' + x.resultVersion : ''} · Token 输入 ${x.inputTokens ?? '未知'} / 输出 ${x.outputTokens ?? '未知'} / 缓存 ${x.cachedTokens ?? '未知'} · ${x.durationMs ?? '—'} ms`);
+                const item = row(callList, `#${x.id}${x.requestKey ? " · 请求 " + x.requestKey : ""}${x.batchId ? " · 批次 " + x.batchId : ""} · ${x.createdAt || ''} · ${x.scenario} · ${x.provider || '供应商未知'}/${x.modelName || '模型未知'} · 提示词版本 ID ${x.promptVersionId} · 模型 ${STATUS_LABEL[x.status] || x.status} · 业务 ${STATUS_LABEL[x.businessStatus] || '历史数据未知'}${x.resultVersion != null ? ' · 产物版本 ' + x.resultVersion : ''} · Token 输入 ${x.inputTokens ?? '未知'} / 输出 ${x.outputTokens ?? '未知'} / 缓存 ${x.cachedTokens ?? '未知'} · ${x.durationMs ?? '—'} ms`);
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'button outline';

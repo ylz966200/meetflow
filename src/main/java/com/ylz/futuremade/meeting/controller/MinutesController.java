@@ -1,8 +1,9 @@
 package com.ylz.futuremade.meeting.controller;
 
+import com.ylz.futuremade.assistant.model.dto.AiCallContext;
+
 import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
 
-import com.ylz.futuremade.common.enums.BusinessStatus;
 
 import com.ylz.futuremade.meeting.model.dto.GenerateMinutesRequest;
 import com.ylz.futuremade.meeting.model.dto.SaveMinutesRequest;
@@ -93,16 +94,14 @@ public class MinutesController {
             if (transcript.content().length() > 12000)
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前仅支持不超过12000字符的文字稿");
             var prompt = prompts.active(PromptScenarioCode.MEETING_MINUTES.code());
-            long callId = prompts.startCall(prompt, id, outline.getTranscriptVersion(), actor, key, input.getOutlineVersion()), start = System.nanoTime();
+            var audit = new AiCallContext(prompt, id, outline.getTranscriptVersion(), actor, key, input.getOutlineVersion());
             com.ylz.futuremade.meeting.model.dto.StructuredMinutes document;
             try {
-                document = generator.generate(transcript.content(), outline.getItems(), prompt.getContent(), callId);
+                document = generator.generate(transcript.content(), outline.getItems(), audit);
             } catch (MinutesGenerator.MinutesGenerationException ex) {
                 com.ylz.futuremade.common.logging.ErrorDiagnostics.error("会议纪要生成失败", ex);
-                prompts.finishCall(callId, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000, "GENERATION_FAILED");
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "纪要生成失败，请稍后重试");
             }
-            prompts.finishCall(callId, BusinessStatus.SUCCEEDED.code(), (System.nanoTime() - start) / 1_000_000, null);
             return results.structuredMinutes(key, id, actor, input.getOutlineVersion(), input.getExpectedVersion(), document);
         } catch (RuntimeException ex) {
             requests.failed(key);

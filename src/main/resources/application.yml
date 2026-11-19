@@ -107,3 +107,8 @@ logging:
     com.ylz.futuremade.identity.mapper: ${MEETFLOW_MYBATIS_LOG_LEVEL:DEBUG}
     com.ylz.futuremade.meeting.mapper: ${MEETFLOW_MYBATIS_LOG_LEVEL:DEBUG}
     com.ylz.futuremade.prompt.mapper: ${MEETFLOW_MYBATIS_LOG_LEVEL:DEBUG}
+    # 调用快照保存完整会议正文及工具返回，避免 MyBatis 在控制台打印参数。
+    com.ylz.futuremade.prompt.mapper.PromptMapper.insertContent: INFO
+    com.ylz.futuremade.prompt.mapper.PromptMapper.updateOutput: INFO
+    com.ylz.futuremade.prompt.mapper.PromptMapper.updateToolTrace: INFO
+    com.ylz.futuremade.prompt.mapper.PromptMapper.content: INFO

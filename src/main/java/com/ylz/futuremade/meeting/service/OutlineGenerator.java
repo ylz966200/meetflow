@@ -1,10 +1,11 @@
 package com.ylz.futuremade.meeting.service;
 
+import com.ylz.futuremade.assistant.model.dto.AiCallContext;
+
 import com.ylz.futuremade.meeting.model.dto.OutlineModelResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.assistant.service.AiModelGateway;
 import org.springframework.stereotype.Component;
-import com.ylz.futuremade.prompt.service.PromptService;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,21 +17,16 @@ import java.util.List;
 public class OutlineGenerator {
     private final AiModelGateway model;
     private final ObjectMapper json;
-    private final PromptService prompts;
 
-    public OutlineGenerator(AiModelGateway model, ObjectMapper json, PromptService prompts) {
+    public OutlineGenerator(AiModelGateway model, ObjectMapper json) {
         this.model = model;
         this.json = json;
-        this.prompts = prompts;
     }
 
-    public List<String> generate(String transcript, String systemPrompt, long callId) {
+    public List<String> generate(String transcript, AiCallContext audit) {
         try {
-            prompts.recordInput(callId, systemPrompt, transcript);
-            var modelResponse = model.call(systemPrompt, transcript);
+            var modelResponse = model.call(audit, transcript);
             String response = modelResponse.getResult().getOutput().getText();
-            prompts.recordOutput(callId, response);
-            prompts.recordMetadata(callId, modelResponse);
             var parsed = json.readValue(response, OutlineModelResponse.class);
             var items = parsed.getItems();
             if (items == null || items.isEmpty() || items.size() > 30)

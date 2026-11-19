@@ -1,8 +1,9 @@
 package com.ylz.futuremade.meeting.controller;
 
+import com.ylz.futuremade.assistant.model.dto.AiCallContext;
+
 import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
 
-import com.ylz.futuremade.common.enums.BusinessStatus;
 
 import com.ylz.futuremade.meeting.service.MeetingService;
 import com.ylz.futuremade.meeting.service.OutlineGenerator;
@@ -105,17 +106,14 @@ public class OutlineController {
                 }
             }
             var prompt = prompts.active(PromptScenarioCode.MEETING_OUTLINE.code());
-            long callId = prompts.startCall(prompt, id, input.getTranscriptVersion(), actor, key, null);
-            long start = System.nanoTime();
+            var audit = new AiCallContext(prompt, id, input.getTranscriptVersion(), actor, key, null);
             java.util.List<String> items;
             try {
-                items = generator.generate(transcript.content(), prompt.getContent(), callId);
+                items = generator.generate(transcript.content(), audit);
             } catch (OutlineGenerator.OutlineGenerationException ex) {
                 com.ylz.futuremade.common.logging.ErrorDiagnostics.error("会议大纲生成失败", ex);
-                prompts.finishCall(callId, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000, "GENERATION_FAILED");
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "大纲生成失败，请稍后重试");
             }
-            prompts.finishCall(callId, BusinessStatus.SUCCEEDED.code(), (System.nanoTime() - start) / 1_000_000, null);
             return results.outline(key, id, actor, input.getTranscriptVersion(), input.getExpectedVersion(), items);
         } catch (RuntimeException ex) {
             requests.failed(key);

@@ -82,6 +82,10 @@
         <!-- 仅引入 Milvus 实现，避免未配置时自动连接云端。 -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-rag</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-milvus-store</artifactId>
         </dependency>
 

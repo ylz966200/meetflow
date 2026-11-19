@@ -37,6 +37,19 @@ class SecurityConfigurationTest {
     @Autowired com.ylz.futuremade.meeting.service.TranscriptionService transcriptionService;
     @Autowired com.ylz.futuremade.prompt.mapper.PromptMapper promptMapper;
     @Autowired com.ylz.futuremade.prompt.service.PromptService promptService;
+
+    /** 使用真实网关与数据库，仅替换外部模型传输。 */
+    private void modelRequest(com.ylz.futuremade.assistant.model.dto.AiCallContext context, boolean fail) {
+        var transport = org.mockito.Mockito.mock(org.springframework.ai.chat.model.ChatModel.class);
+        var stub = when(transport.call(org.mockito.ArgumentMatchers.any(org.springframework.ai.chat.prompt.Prompt.class)));
+        if (fail) stub.thenThrow(new IllegalStateException("模拟模型失败"));
+        else stub.thenReturn(new org.springframework.ai.chat.model.ChatResponse(java.util.List.of(
+                new org.springframework.ai.chat.model.Generation(new org.springframework.ai.chat.messages.AssistantMessage("测试结果")))));
+        var advisor = new com.ylz.futuremade.assistant.service.AiCallAdvisor(promptService, new ObjectMapper());
+        new com.ylz.futuremade.assistant.service.AiModelGateway(java.util.Map.of("test", transport), "test", advisor)
+                .call(context, "测试输入");
+    }
+
     @Autowired org.springframework.security.oauth2.jwt.JwtEncoder encoder;
     @MockBean OutlineGenerator outlineGenerator;
     @MockBean MinutesGenerator minutesGenerator;
@@ -212,13 +225,13 @@ class SecurityConfigurationTest {
         jdbc.update("INSERT INTO mf_meeting(id,owner_id,title) VALUES ('meeting-a',1,'会议 A')");
         String segments="[{\"startMillis\":0,\"endMillis\":100,\"speakerLabel\":\"1\",\"text\":\"你好\"}]";
         jdbc.update("INSERT INTO mf_transcription_task(id,meeting_id,recording_id,created_by,status,segments_json) VALUES ('task-a','meeting-a','rec-a',1,4,?)",segments);
-        when(transcriptOrganizer.generate(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong())).thenReturn("整理后的内容");
+        when(transcriptOrganizer.generate(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> { modelRequest(inv.getArgument(1), false); return "整理后的内容"; });
         String key="11111111-1111-4111-8111-111111111111", body="{\"taskIds\":[\"task-a\"],\"expectedVersion\":0}";
         String route="/api/meetings/meeting-a/transcriptions/organize";
         mvc.perform(post(route).header("Authorization","Bearer "+token).header("Idempotency-Key",key).contentType("application/json").content(body)).andExpect(status().isOk()).andExpect(jsonPath("$.draftId").value(key)).andExpect(jsonPath("$.sources[0].taskId").value("task-a"));
         mvc.perform(post(route).header("Authorization","Bearer "+token).header("Idempotency-Key",key).contentType("application/json").content(body)).andExpect(status().isOk());
         mvc.perform(post(route).header("Authorization","Bearer "+token).header("Idempotency-Key",key).contentType("application/json").content("{\"taskIds\":[\"other\"],\"expectedVersion\":0}")).andExpect(status().isConflict());
-        org.mockito.Mockito.verify(transcriptOrganizer,org.mockito.Mockito.times(1)).generate(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong());
+        org.mockito.Mockito.verify(transcriptOrganizer,org.mockito.Mockito.times(1)).generate(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.any());
         mvc.perform(post("/api/meetings/meeting-a/transcript").header("Authorization","Bearer "+token).contentType("application/json").content("{\"content\":\"人工审核后的内容\",\"expectedVersion\":0,\"aiDraftId\":\""+key+"\"}")).andExpect(status().isOk()).andExpect(jsonPath("$.version").value(1));
         mvc.perform(get("/api/meetings/meeting-a/transcript/source?version=1").header("Authorization","Bearer "+token)).andExpect(status().isOk()).andExpect(jsonPath("$.draftId").value(key)).andExpect(jsonPath("$.sources[0].speakerReviewVersion").value(0)).andExpect(jsonPath("$.aiCallId").isNumber());
         mvc.perform(post("/api/meetings/meeting-a/transcript").header("Authorization","Bearer "+token).contentType("application/json").content("{\"content\":\"重复内容\",\"expectedVersion\":1,\"aiDraftId\":\""+key+"\"}")).andExpect(status().isConflict());
@@ -231,12 +244,12 @@ class SecurityConfigurationTest {
         jdbc.update("INSERT INTO mf_transcription_task(id,meeting_id,created_by,status,segments_json) VALUES ('task-a','meeting-a',1,4,?)",segments);
         var result=new com.ylz.futuremade.meeting.model.dto.ChunkExtractionView();
         result.setTaskId("task-a");result.setChunkIndex(1);result.setSpeakerReviewVersion(0);result.setItems(java.util.List.of());
-        when(chunkExtractionAgent.extract(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong(),org.mockito.ArgumentMatchers.anyString())).thenReturn(result);
+        when(chunkExtractionAgent.extract(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString())).thenReturn(result);
         String key="33333333-3333-4333-8333-333333333333",path="/api/meetings/meeting-a/transcriptions/task-a/chunks/1/extract";
         String body="{\"speakerReviewVersion\":0}";
         mvc.perform(post(path).header("Authorization","Bearer "+token).header("Idempotency-Key",key).contentType("application/json").content(body)).andExpect(status().isOk()).andExpect(jsonPath("$.taskId").value("task-a"));
         mvc.perform(post(path).header("Authorization","Bearer "+token).header("Idempotency-Key",key).contentType("application/json").content(body)).andExpect(status().isOk());
-        org.mockito.Mockito.verify(chunkExtractionAgent,org.mockito.Mockito.times(1)).extract(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong(),org.mockito.ArgumentMatchers.anyString());
+        org.mockito.Mockito.verify(chunkExtractionAgent,org.mockito.Mockito.times(1)).extract(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString());
         mvc.perform(post(path).header("Authorization","Bearer "+token).header("Idempotency-Key","44444444-4444-4444-8444-444444444444").contentType("application/json").content("{\"speakerReviewVersion\":1}")).andExpect(status().isConflict());
         mvc.perform(post("/api/meetings/meeting-b/transcriptions/task-a/chunks/1/extract").header("Authorization","Bearer "+token).header("Idempotency-Key","55555555-5555-4555-8555-555555555555").contentType("application/json").content(body)).andExpect(status().isNotFound());
     }
@@ -250,7 +263,7 @@ class SecurityConfigurationTest {
                 .header("Idempotency-Key","22222222-2222-4222-8222-222222222222").contentType("application/json")
                 .content("{\"taskIds\":[\"task-a\"],\"expectedVersion\":0}"))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("超过当前上限 12000")));
-        org.mockito.Mockito.verify(transcriptOrganizer,org.mockito.Mockito.never()).generate(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong());
+        org.mockito.Mockito.verify(transcriptOrganizer,org.mockito.Mockito.never()).generate(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.any());
     }
 
     @Test void disabledOrRecreatedAccountCannotUseOldToken() throws Exception {
@@ -410,7 +423,7 @@ class SecurityConfigurationTest {
         String id=new ObjectMapper().readTree(meeting.getContentAsString()).get("id").asText();
         mvc.perform(post("/api/meetings/"+id+"/transcript").header("Authorization","Bearer "+token)
                 .contentType("application/json").content("{\"content\":\"讨论预算\",\"expectedVersion\":0}")).andExpect(status().isOk());
-        when(outlineGenerator.generate(org.mockito.ArgumentMatchers.eq("讨论预算"),org.mockito.ArgumentMatchers.eq("测试提示词"),org.mockito.ArgumentMatchers.anyLong())).thenReturn(java.util.List.of("预算讨论"));
+        when(outlineGenerator.generate(org.mockito.ArgumentMatchers.eq("讨论预算"),org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> { modelRequest(inv.getArgument(1), false); return java.util.List.of("预算讨论"); });
         mvc.perform(post("/api/meetings/"+id+"/outline/generate").header("Authorization","Bearer "+token)
                 .contentType("application/json").content("{\"transcriptVersion\":1,\"expectedVersion\":0}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.items[0]").value("预算讨论"));
@@ -426,7 +439,7 @@ class SecurityConfigurationTest {
                 .contentType("application/json").content("{\"content\":\"更新文字\",\"expectedVersion\":1}")).andExpect(status().isOk());
         mvc.perform(get("/api/meetings/"+id+"/outline").header("Authorization","Bearer "+token))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.stale").value(true));
-        when(outlineGenerator.generate(org.mockito.ArgumentMatchers.eq("更新文字"),org.mockito.ArgumentMatchers.eq("测试提示词"),org.mockito.ArgumentMatchers.anyLong())).thenThrow(new OutlineGenerator.OutlineGenerationException(new RuntimeException("模拟失败")));
+        when(outlineGenerator.generate(org.mockito.ArgumentMatchers.eq("更新文字"),org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> { try { modelRequest(inv.getArgument(1), true); } catch (RuntimeException ex) { throw new OutlineGenerator.OutlineGenerationException(ex); } throw new AssertionError(); });
         mvc.perform(post("/api/meetings/"+id+"/outline/generate").header("Authorization","Bearer "+token)
                 .contentType("application/json").content("{\"transcriptVersion\":2,\"expectedVersion\":2}"))
                 .andExpect(status().isBadGateway());
@@ -506,7 +519,7 @@ class SecurityConfigurationTest {
         section.setOutlineId(1); section.setTitle("预算"); section.setContent("讨论了预算。"); section.setSourceSegmentIds(java.util.List.of());
         var document = new com.ylz.futuremade.meeting.model.dto.StructuredMinutes();
         document.setSections(java.util.List.of(section)); document.setActions(java.util.List.of());
-        when(minutesGenerator.generate(org.mockito.ArgumentMatchers.eq("讨论预算"),org.mockito.ArgumentMatchers.eq(java.util.List.of("预算")),org.mockito.ArgumentMatchers.eq("纪要提示词"),org.mockito.ArgumentMatchers.anyLong())).thenReturn(document);
+        when(minutesGenerator.generate(org.mockito.ArgumentMatchers.eq("讨论预算"),org.mockito.ArgumentMatchers.eq(java.util.List.of("预算")),org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> { modelRequest(inv.getArgument(2), false); return document; });
         mvc.perform(post("/api/meetings/"+id+"/minutes/generate").header("Authorization","Bearer "+token)
                 .contentType("application/json").content("{\"outlineVersion\":2,\"expectedVersion\":0}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value(BusinessStatus.DRAFT.code())).andExpect(jsonPath("$.outlineVersion").value(2));
@@ -543,7 +556,8 @@ class SecurityConfigurationTest {
         String id=new ObjectMapper().readTree(meeting.getContentAsString()).get("id").asText();
         jdbc.update("INSERT INTO mf_transcript_version(meeting_id,version,content,created_by) VALUES (?,1,'原文字稿',1)",id);
         jdbc.update("INSERT INTO mf_outline_version(meeting_id,version,transcript_version,status,items_json,created_by) VALUES(?,1,1,2,'[\"主题\"]',1)",id);
-        when(minutesGenerator.generate(org.mockito.ArgumentMatchers.eq("原文字稿"),org.mockito.ArgumentMatchers.eq(java.util.List.of("主题")),org.mockito.ArgumentMatchers.eq("纪要提示词"),org.mockito.ArgumentMatchers.anyLong())).thenAnswer(invocation -> {
+        when(minutesGenerator.generate(org.mockito.ArgumentMatchers.eq("原文字稿"),org.mockito.ArgumentMatchers.eq(java.util.List.of("主题")),org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
+            modelRequest(invocation.getArgument(2), false);
             jdbc.update("INSERT INTO mf_transcript_version(meeting_id,version,content,created_by) VALUES (?,2,'新文字稿',1)",id);
             var section = new com.ylz.futuremade.meeting.model.dto.MinutesSection();
             section.setOutlineId(1); section.setTitle("主题"); section.setContent("生成结果"); section.setSourceSegmentIds(java.util.List.of());
@@ -631,12 +645,12 @@ class SecurityConfigurationTest {
                 .andExpect(status().isCreated()).andReturn().getResponse();
         String id=new ObjectMapper().readTree(response.getContentAsString()).get("id").asText();
         jdbc.update("INSERT INTO mf_transcript_version(meeting_id,version,content,created_by) VALUES (?,1,'幂等文字稿',1)",id);
-        when(outlineGenerator.generate(org.mockito.ArgumentMatchers.eq("幂等文字稿"),org.mockito.ArgumentMatchers.eq("测试提示词"),org.mockito.ArgumentMatchers.anyLong())).thenReturn(java.util.List.of("幂等议题"));
+        when(outlineGenerator.generate(org.mockito.ArgumentMatchers.eq("幂等文字稿"),org.mockito.ArgumentMatchers.any())).thenReturn(java.util.List.of("幂等议题"));
         String key=java.util.UUID.randomUUID().toString();
         String body="{\"transcriptVersion\":1,\"expectedVersion\":0}";
         for(int i=0;i<2;i++) mvc.perform(post("/api/meetings/"+id+"/outline/generate").header("Authorization","Bearer "+token).header("Idempotency-Key",key)
                 .contentType("application/json").content(body)).andExpect(status().isOk()).andExpect(jsonPath("$.version").value(1));
-        org.mockito.Mockito.verify(outlineGenerator,org.mockito.Mockito.times(1)).generate(org.mockito.ArgumentMatchers.eq("幂等文字稿"),org.mockito.ArgumentMatchers.eq("测试提示词"),org.mockito.ArgumentMatchers.anyLong());
+        org.mockito.Mockito.verify(outlineGenerator,org.mockito.Mockito.times(1)).generate(org.mockito.ArgumentMatchers.eq("幂等文字稿"),org.mockito.ArgumentMatchers.any());
         mvc.perform(post("/api/meetings/"+id+"/outline/generate").header("Authorization","Bearer "+token).header("Idempotency-Key",key)
                 .contentType("application/json").content("{\"transcriptVersion\":1,\"expectedVersion\":1}")).andExpect(status().isConflict());
     }
@@ -649,7 +663,7 @@ class SecurityConfigurationTest {
         jdbc.update("INSERT INTO mf_transcript_version(meeting_id,version,content,created_by) VALUES (?,1,'并发文字稿',1)",id);
         var started=new java.util.concurrent.CountDownLatch(1);
         var release=new java.util.concurrent.CountDownLatch(1);
-        when(outlineGenerator.generate(org.mockito.ArgumentMatchers.eq("并发文字稿"),org.mockito.ArgumentMatchers.eq("测试提示词"),org.mockito.ArgumentMatchers.anyLong())).thenAnswer(invocation->{started.countDown();release.await(5,java.util.concurrent.TimeUnit.SECONDS);return java.util.List.of("并发议题");});
+        when(outlineGenerator.generate(org.mockito.ArgumentMatchers.eq("并发文字稿"),org.mockito.ArgumentMatchers.any())).thenAnswer(invocation->{started.countDown();release.await(5,java.util.concurrent.TimeUnit.SECONDS);return java.util.List.of("并发议题");});
         String key=java.util.UUID.randomUUID().toString(),body="{\"transcriptVersion\":1,\"expectedVersion\":0}";
         var executor=java.util.concurrent.Executors.newSingleThreadExecutor();
         try {
@@ -660,7 +674,7 @@ class SecurityConfigurationTest {
                     .contentType("application/json").content(body)).andExpect(status().isTooEarly());
             release.countDown();
             org.junit.jupiter.api.Assertions.assertEquals(200,first.get(5,java.util.concurrent.TimeUnit.SECONDS));
-            org.mockito.Mockito.verify(outlineGenerator,org.mockito.Mockito.times(1)).generate(org.mockito.ArgumentMatchers.eq("并发文字稿"),org.mockito.ArgumentMatchers.eq("测试提示词"),org.mockito.ArgumentMatchers.anyLong());
+            org.mockito.Mockito.verify(outlineGenerator,org.mockito.Mockito.times(1)).generate(org.mockito.ArgumentMatchers.eq("并发文字稿"),org.mockito.ArgumentMatchers.any());
         } finally {release.countDown();executor.shutdownNow();}
     }
 

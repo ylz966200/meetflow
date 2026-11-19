@@ -67,6 +67,19 @@ public interface PromptMapper {
     @Select("SELECT call_id AS callId,system_content AS systemContent,user_content AS userContent,output_content AS outputContent,tool_trace AS toolTrace,created_at AS createdAt FROM mf_ai_call_content WHERE call_id=#{callId}")
     AiCallContent content(long callId);
 
-    @Select("SELECT c.id,c.scenario,c.prompt_version_id AS promptVersionId,c.meeting_id AS meetingId,c.transcript_version AS transcriptVersion,c.actor_id AS actorId,c.status,c.duration_ms AS durationMs,c.error_category AS errorCategory,c.created_at AS createdAt,c.request_key AS requestKey,c.outline_version AS outlineVersion,c.provider,c.model_name AS modelName,c.provider_request_id AS providerRequestId,c.input_tokens AS inputTokens,c.output_tokens AS outputTokens,c.cached_tokens AS cachedTokens,r.status AS businessStatus,r.result_version AS resultVersion FROM mf_ai_call c LEFT JOIN mf_generation_request r ON r.request_key=c.request_key ORDER BY c.id DESC LIMIT #{limit} OFFSET #{offset}")
+    // 后台模型请求以批次 ID 关联任务，同步请求和历史记录沿用业务请求标识。
+    @Select("""
+            SELECT c.id, c.scenario, c.prompt_version_id AS promptVersionId, c.meeting_id AS meetingId,
+                   c.transcript_version AS transcriptVersion, c.actor_id AS actorId, c.status, c.duration_ms AS durationMs,
+                   c.error_category AS errorCategory, c.created_at AS createdAt, COALESCE(t.request_key, c.request_key) AS requestKey,
+                   b.id AS batchId, c.outline_version AS outlineVersion, c.provider, c.model_name AS modelName,
+                   c.provider_request_id AS providerRequestId, c.input_tokens AS inputTokens, c.output_tokens AS outputTokens,
+                   c.cached_tokens AS cachedTokens, r.status AS businessStatus, COALESCE(r.result_version,t.result_version) AS resultVersion
+            FROM mf_ai_call c
+            LEFT JOIN mf_ai_generation_batch b ON b.id=c.request_key
+            LEFT JOIN mf_ai_generation_task t ON t.id=b.task_id
+            LEFT JOIN mf_generation_request r ON r.request_key=COALESCE(t.request_key,c.request_key)
+            ORDER BY c.id DESC LIMIT #{limit} OFFSET #{offset}
+            """)
     List<PromptCall> calls(@Param("limit") int limit, @Param("offset") int offset);
 }

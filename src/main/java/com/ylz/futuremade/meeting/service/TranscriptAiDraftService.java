@@ -1,5 +1,7 @@
 package com.ylz.futuremade.meeting.service;
 
+import com.ylz.futuremade.assistant.model.dto.AiCallContext;
+
 import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -15,7 +17,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.List;
@@ -82,20 +83,15 @@ public class TranscriptAiDraftService {
             } catch (DuplicateKeyException ex) {
                 return replay(drafts.find(key), meetingId, actor, hash);
             }
-            Long callId = null;
-            long start = System.nanoTime();
+            var audit = new AiCallContext(prompt, meetingId, null, actor, key, null);
             try {
-                callId = prompts.startCall(prompt, meetingId, null, actor, key, null);
-                String output = organizer.generate(assembled.getContent(), prompt.getContent(), callId);
-                prompts.finishCall(callId, BusinessStatus.SUCCEEDED.code(), (System.nanoTime() - start) / 1_000_000, null);
-                if (drafts.finish(key, BusinessStatus.SUCCEEDED.code(), callId, output) != 1)
+                String output = organizer.generate(assembled.getContent(), audit);
+                if (drafts.finish(key, BusinessStatus.SUCCEEDED.code(), audit.getLastCallId(), output) != 1)
                     throw new IllegalStateException("草稿状态异常");
                 return replay(drafts.find(key), meetingId, actor, hash);
             } catch (Exception ex) {
                 com.ylz.futuremade.common.logging.ErrorDiagnostics.error("文字稿整理失败", ex);
-                if (callId != null)
-                    prompts.finishCall(callId, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000, "GENERATION_FAILED");
-                drafts.finish(key, BusinessStatus.FAILED.code(), callId, null);
+                drafts.finish(key, BusinessStatus.FAILED.code(), audit.getLastCallId(), null);
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "文字稿整理失败，请稍后重试");
             }
         } catch (ResponseStatusException ex) {

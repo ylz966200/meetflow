@@ -79,7 +79,7 @@ public class MinutesBatchWorker {
             var config = json.readValue(task.getConfigJson(), MinutesTaskConfig.class);
             var prompt = prompts.version(PromptScenarioCode.MEETING_MINUTES.code(), task.getPromptVersionId());
             var execution = generator.generateSingleBatch(input, outline.getSources(), prompt, task.getMeetingId(), outline,
-                    task.getActorId(), user.username(), task.getRequestKey(), config);
+                    task.getActorId(), user.username(), batchId, config);
             if (lost.get()) return false;
             return leases.complete(batchId, token, json.writeValueAsString(execution.getResult()), execution.getAiCallId());
         } catch (ModelOutputTruncatedException ex) {

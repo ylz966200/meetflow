@@ -4,6 +4,8 @@ package com.ylz.futuremade.prompt.enums;
  * 系统内置的提示词业务场景，编码与数据库和接口保持一致。
  */
 public enum PromptScenarioCode {
+    /** 结合会话历史改写知识检索问题。 */
+    MEETING_KNOWLEDGE_QUERY_REWRITE("MEETING_KNOWLEDGE_QUERY_REWRITE"),
     /**
      * 基于会议纪要进行知识问答。
      */

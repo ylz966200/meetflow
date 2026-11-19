@@ -1,13 +1,13 @@
 
 package com.ylz.futuremade.meeting.service;
 
+import com.ylz.futuremade.assistant.model.dto.AiCallContext;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.assistant.service.ModelOutputTruncatedException;
 import com.ylz.futuremade.assistant.service.ToolCallingExecutor;
-import com.ylz.futuremade.common.enums.BusinessStatus;
 import com.ylz.futuremade.meeting.model.dto.*;
 import com.ylz.futuremade.prompt.model.entity.PromptVersion;
-import com.ylz.futuremade.prompt.service.PromptService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -24,21 +24,19 @@ import java.util.*;
 public class MinutesBatchGenerator {
     private final ToolCallingExecutor executor;
     private final MeetingService meetings;
-    private final PromptService prompts;
     private final ObjectMapper json;
     private final int maxBatchBytes;
     private final int maxToolCalls;
     private final int maxSourceSegments;
     private final int maxSourceChars;
 
-    public MinutesBatchGenerator(ToolCallingExecutor executor, MeetingService meetings, PromptService prompts,
+    public MinutesBatchGenerator(ToolCallingExecutor executor, MeetingService meetings,
                                  ObjectMapper json, @Value("${meetflow.minutes.batch-max-bytes:24000}") int maxBatchBytes,
                                  @Value("${meetflow.minutes.max-tool-calls:4}") int maxToolCalls,
                                  @Value("${meetflow.minutes.max-source-segments:20}") int maxSourceSegments,
                                  @Value("${meetflow.minutes.max-source-chars:6000}") int maxSourceChars) {
         this.executor = executor;
         this.meetings = meetings;
-        this.prompts = prompts;
         this.json = json;
         this.maxBatchBytes = maxBatchBytes;
         this.maxToolCalls = maxToolCalls;
@@ -152,41 +150,20 @@ public class MinutesBatchGenerator {
      */
     public MinutesBatchExecutionResult generateSingleBatch(List<MinutesOutlineInput> batch, OutlineSourceSnapshot source, PromptVersion prompt,
                                                            String meetingId, OutlineView outline, long actor, String username, String key, MinutesTaskConfig config) throws Exception {
-        long callId = prompts.startCall(prompt, meetingId, outline.getTranscriptVersion(), actor, key, outline.getVersion());
-        long start = System.nanoTime();
-        try {
-            var sourceTool = new MinutesSourceTools(batch, source.getSourceSegments(), config.getMaxSourceSegments(), config.getMaxSourceChars(),
-                    () -> meetings.requireOutlineEditor(meetingId, actor, false));
-            meetings.requireOutlineEditor(meetingId, actor, false);
-            var callbacks = org.springframework.ai.support.ToolCallbacks.from(sourceTool);
-            String instructions = prompt.getContent();
-            String input = json.writeValueAsString(batch);
-            prompts.recordInput(callId, instructions, input);
-            List<ExtractionToolTrace> traces = new ArrayList<>();
-            String output = executor.execute(instructions, input, callbacks, config.getMaxToolCalls(), (call, returned) -> {
-                var trace = new ExtractionToolTrace();
-                trace.setCallId(call.id());
-                trace.setName(call.name());
-                trace.setArguments(call.arguments());
-                trace.setResult(returned);
-                traces.add(trace);
-                prompts.recordToolTrace(callId, json.writeValueAsString(traces));
-            });
-            prompts.recordOutput(callId, output);
-            var result = json.readValue(output, MinutesBatchResponse.class);
-            validate(batch, result);
-            prompts.finishCall(callId, BusinessStatus.SUCCEEDED.code(), (System.nanoTime() - start) / 1_000_000, null);
-            var execution = new MinutesBatchExecutionResult();
-            execution.setResult(result);
-            execution.setAiCallId(callId);
-            return execution;
-        } catch (ModelOutputTruncatedException ex) {
-            prompts.finishCall(callId, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000, "OUTPUT_TRUNCATED");
-            throw ex;
-        } catch (Exception ex) {
-            prompts.finishCall(callId, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000, "GENERATION_FAILED");
-            throw ex;
-        }
+        var audit = new AiCallContext(prompt, meetingId, outline.getTranscriptVersion(), actor, key, outline.getVersion());
+        var sourceTool = new MinutesSourceTools(batch, source.getSourceSegments(), config.getMaxSourceSegments(), config.getMaxSourceChars(),
+                () -> meetings.requireOutlineEditor(meetingId, actor, false));
+        meetings.requireOutlineEditor(meetingId, actor, false);
+        var callbacks = org.springframework.ai.support.ToolCallbacks.from(sourceTool);
+        String input = json.writeValueAsString(batch);
+        String output = executor.execute(audit, input, callbacks, config.getMaxToolCalls(), (call, returned) -> {
+        });
+        var result = json.readValue(output, MinutesBatchResponse.class);
+        validate(batch, result);
+        var execution = new MinutesBatchExecutionResult();
+        execution.setResult(result);
+        execution.setAiCallId(audit.getLastCallId());
+        return execution;
     }
 
     private void validate(List<MinutesOutlineInput> batch, MinutesBatchResponse result) {

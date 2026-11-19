@@ -1,8 +1,9 @@
 package com.ylz.futuremade.meeting.service;
 
+import com.ylz.futuremade.assistant.model.dto.AiCallContext;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.assistant.service.AiModelGateway;
-import com.ylz.futuremade.common.enums.BusinessStatus;
 import com.ylz.futuremade.meeting.model.dto.*;
 import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
 import com.ylz.futuremade.prompt.model.entity.PromptVersion;
@@ -206,23 +207,15 @@ public class TopicAnalysisService {
 
     private String call(PromptVersion prompt, String input, String meetingId, long actor, String requestKey, CallCounter calls) throws Exception {
         if (++calls.count > maxCalls) throw new IllegalStateException("分析调用次数达到上限，请缩小分析范围");
-        long id = prompts.startCall(prompt, meetingId, null, actor, requestKey, null);
-        calls.lastCallId = id;
-        long start = System.nanoTime();
+        var audit = new AiCallContext(prompt, meetingId, null, actor, requestKey, null);
         try {
-            prompts.recordInput(id, prompt.getContent(), input);
-            var response = models.call(prompt.getContent(), input);
+            var response = models.call(audit, input);
             String output = response.getResult().getOutput().getText();
-            prompts.recordOutput(id, output);
-            prompts.recordMetadata(id, response);
-            if (response.hasFinishReasons(Set.of("length"))) throw new OutputTruncatedException();
+            if (response.hasFinishReasons(Set.of("length", "LENGTH"))) throw new OutputTruncatedException();
             if (output == null || output.isBlank()) throw new IllegalStateException("模型返回空内容");
-            prompts.finishCall(id, BusinessStatus.SUCCEEDED.code(), (System.nanoTime() - start) / 1_000_000, null);
             return output;
-        } catch (Exception ex) {
-            prompts.finishCall(id, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000,
-                    ex instanceof OutputTruncatedException ? "OUTPUT_TRUNCATED" : "ANALYSIS_FAILED");
-            throw ex;
+        } finally {
+            calls.lastCallId = audit.getLastCallId();
         }
     }
 

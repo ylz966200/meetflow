@@ -108,11 +108,11 @@ public class OutlineTaskWorker {
             if (OutlineTaskService.GROUP_BATCH.equals(part.getBatchNo())) {
                 var config = json.readValue(task.getConfigJson(), OutlineTaskConfig.class);
                 var prompt = prompts.version(PromptScenarioCode.TRANSCRIPT_TOPIC_GROUPING.code(), config.getGroupingPromptVersionId());
-                result = generator.buildDraft(results, all, task.getTranscriptVersion(), task.getMeetingId(), task.getActorId(), task.getRequestKey(), prompt);
+                result = generator.buildDraft(results, all, task.getTranscriptVersion(), task.getMeetingId(), task.getActorId(), batchId, prompt);
             } else {
                 var chunk = json.readValue(part.getInputJson(), TranscriptChunkView.class);
                 var prompt = prompts.version(PromptScenarioCode.TRANSCRIPT_EXTRACTION.code(), task.getPromptVersionId());
-                result = generator.extractChunk(chunk, all, prompt, task.getMeetingId(), task.getTranscriptVersion(), task.getActorId(), user.username(), task.getRequestKey());
+                result = generator.extractChunk(chunk, all, prompt, task.getMeetingId(), task.getTranscriptVersion(), task.getActorId(), user.username(), batchId);
             }
             if (lost.get()) return false;
             return leases.complete(batchId, token, json.writeValueAsString(result), null);

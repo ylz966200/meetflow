@@ -1,8 +1,9 @@
 package com.ylz.futuremade.meeting.service;
 
+import com.ylz.futuremade.assistant.model.dto.AiCallContext;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.assistant.service.ModelOutputTruncatedException;
-import com.ylz.futuremade.common.enums.BusinessStatus;
 import com.ylz.futuremade.meeting.model.dto.*;
 import com.ylz.futuremade.meeting.transcript.*;
 import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
@@ -102,15 +103,13 @@ public class TranscriptOutlineGenerator {
 
     private List<ChunkExtractionItem> extract(TranscriptChunkView chunk, List<ChunkUtterance> all, PromptVersion prompt,
                                               String meetingId, int version, long actor, String username, String key) throws Exception {
-        long callId = prompts.startCall(prompt, meetingId, version, actor, key, null), start = System.nanoTime();
+        var audit = new AiCallContext(prompt, meetingId, version, actor, key, null);
         try {
             int first = chunk.getUtterances().get(0).getSegmentIndex();
             var context = new ChunkExtractionContext(chunk, new MeetingContextTools(all, first, contextProperties));
-            var result = agent.extract(context, prompt.getContent(), callId, username);
-            prompts.finishCall(callId, BusinessStatus.SUCCEEDED.code(), (System.nanoTime() - start) / 1_000_000, null);
+            var result = agent.extract(context, audit, username);
             return result.getItems();
         } catch (ModelOutputTruncatedException ex) {
-            prompts.finishCall(callId, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000, "OUTPUT_TRUNCATED");
             var utterances = chunk.getUtterances();
             if (utterances.size() < 2) throw ex;
             int middle = utterances.size() / 2;
@@ -119,9 +118,6 @@ public class TranscriptOutlineGenerator {
             var combined = new ArrayList<>(extract(left, all, prompt, meetingId, version, actor, username, key));
             combined.addAll(extract(right, all, prompt, meetingId, version, actor, username, key));
             return combined;
-        } catch (Exception ex) {
-            prompts.finishCall(callId, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000, "EXTRACTION_FAILED");
-            throw ex;
         }
     }
 

@@ -1,5 +1,7 @@
 package com.ylz.futuremade.knowledge.service;
 
+import com.ylz.futuremade.assistant.model.dto.AiCallContext;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.assistant.service.AiModelGateway;
 import com.ylz.futuremade.common.enums.BusinessStatus;
@@ -19,6 +21,10 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.prompt.PromptTemplate;
+import org.springframework.ai.rag.Query;
+import org.springframework.ai.rag.preretrieval.query.transformation.CompressionQueryTransformer;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -92,9 +98,7 @@ public class MeetingKnowledgeService {
         return answer(meetingId, actor, question, conversationId, expectedVersion, false);
     }
 
-    /**
-     * 首轮问题按原文精确匹配；有会话上下文时不尝试复用。
-     */
+    /** 结合会话改写问题后，按权限范围查找可复用的缓存。 */
     public KnowledgeAnswer answer(String meetingId, long actor, String question, String conversationId, Integer expectedVersion, boolean bypassCache) throws Exception {
         if (question == null || question.isBlank() || question.length() > 1000)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "问题不能为空且不能超过 1000 字符");
@@ -104,19 +108,28 @@ public class MeetingKnowledgeService {
         String memoryKey = memoryKey(meetingId, actor, view.getVersion(), conversationId);
         var context = recentTurns(memoryKey);
         var prompt = prompts.active(PromptScenarioCode.MEETING_KNOWLEDGE_QA.code());
-        String cacheKey = context.isEmpty() ? cache.key(meetingId, actor, view.getVersion(), prompt.getId(), modelId, question) : null;
-        if (cacheKey != null && !bypassCache) {
-            var cached = cache.get(cacheKey);
-            if (cached != null && cached.getMinutesVersion() == view.getVersion() && cached.getAnswer() != null && !cached.getAnswer().isBlank()
-                    && cached.getSources() != null && !cached.getSources().isEmpty()) {
-                checkUnchanged(meetingId, actor, view);
-                cached.setCached(true);
-                memory.add(memoryKey, List.of(new UserMessage(question), new AssistantMessage(cached.getAnswer())));
-                return cached;
+        String requestKey = UUID.randomUUID().toString();
+        String retrievalQuestion = question;
+        if (!context.isEmpty()) {
+            var rewritePrompt = prompts.active(PromptScenarioCode.MEETING_KNOWLEDGE_QUERY_REWRITE.code());
+            var audit = new AiCallContext(rewritePrompt, meetingId, view.getTranscriptVersion(), actor, requestKey, view.getOutlineVersion());
+            List<Message> history = new ArrayList<>();
+            for (var turn : context) {
+                history.add(new UserMessage(turn.getQuestion()));
+                history.add(new AssistantMessage(turn.getAnswer()));
             }
+            var transformer = CompressionQueryTransformer.builder()
+                    .chatClientBuilder(model.clientBuilder(audit))
+                    .promptTemplate(new PromptTemplate(rewritePrompt.getContent()))
+                    .build();
+            retrievalQuestion = transformer.transform(Query.builder().text(question).history(history).build()).text();
+            checkUnchanged(meetingId, actor, view);
         }
-        // 前一轮问题用于补充代词和省略主题；检索仍受当前会议及版本过滤。
-        String retrievalQuestion = context.isEmpty() ? question : context.get(context.size() - 1).getQuestion() + "\n" + question;
+        String cacheKey = cache.key(meetingId, actor, view.getVersion(), prompt.getId(), modelId, retrievalQuestion);
+        if (!bypassCache) {
+            var cached = cache.get(cacheKey);
+            if (usable(cached, view)) return reuse(cached, meetingId, actor, view, memoryKey, question);
+        }
         float[] query = embedding().embed(retrievalQuestion);
         var hits = vectors.search(collection(query.length), marker(query.length), meetingId, view.getVersion(), query, 5);
         var sources = new ArrayList<KnowledgeSource>();
@@ -134,34 +147,38 @@ public class MeetingKnowledgeService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "当前纪要尚未建立索引，请先建立索引");
         checkUnchanged(meetingId, actor, view);
         var input = new KnowledgeQuestionInput();
-        input.setQuestion(question);
-        input.setHistory(context);
+        input.setQuestion(retrievalQuestion);
+        input.setHistory(List.of());
         input.setSources(sources);
         String data = json.writeValueAsString(input);
-        long callId = prompts.startCall(prompt, meetingId, view.getTranscriptVersion(), actor, null, view.getOutlineVersion());
-        long start = System.nanoTime();
-        try {
-            prompts.recordInput(callId, prompt.getContent(), data);
-            var response = model.call(prompt.getContent(), data);
-            String output = response.getResult().getOutput().getText();
-            prompts.recordOutput(callId, output);
-            prompts.recordMetadata(callId, response);
-            if (response.hasFinishReasons(Set.of("length", "LENGTH")) || output == null || output.isBlank())
-                throw new IllegalStateException("问答结果为空或被截断");
-            checkUnchanged(meetingId, actor, view);
-            // 只记录通过权限、来源版本及输出校验的完整问答，不把参考资料写入会话记忆。
-            memory.add(memoryKey, List.of(new UserMessage(question), new AssistantMessage(output.strip())));
-            prompts.finishCall(callId, BusinessStatus.SUCCEEDED.code(), (System.nanoTime() - start) / 1_000_000, null);
-            var result = new KnowledgeAnswer();
-            result.setMinutesVersion(view.getVersion());
-            result.setAnswer(output.strip());
-            result.setSources(sources);
-            if (cacheKey != null) cache.put(cacheKey, result);
-            return result;
-        } catch (Exception ex) {
-            prompts.finishCall(callId, BusinessStatus.FAILED.code(), (System.nanoTime() - start) / 1_000_000, "GENERATION_FAILED");
-            throw ex;
-        }
+        var audit = new AiCallContext(prompt, meetingId, view.getTranscriptVersion(), actor, requestKey, view.getOutlineVersion());
+        var response = model.call(audit, data);
+        String output = response.getResult().getOutput().getText();
+        if (response.hasFinishReasons(Set.of("length", "LENGTH")) || output == null || output.isBlank())
+            throw new IllegalStateException("问答结果为空或被截断");
+        checkUnchanged(meetingId, actor, view);
+        // 只记录通过权限、来源版本及输出校验的完整问答，不把参考资料写入会话记忆。
+        memory.add(memoryKey, List.of(new UserMessage(question), new AssistantMessage(output.strip())));
+        var result = new KnowledgeAnswer();
+        result.setMinutesVersion(view.getVersion());
+        result.setAnswer(output.strip());
+        result.setSources(sources);
+        cache.put(cacheKey, result);
+        return result;
+    }
+
+    private boolean usable(KnowledgeAnswer answer, MinutesView view) {
+        return answer != null && answer.getMinutesVersion() == view.getVersion()
+                && answer.getAnswer() != null && !answer.getAnswer().isBlank()
+                && answer.getSources() != null && !answer.getSources().isEmpty();
+    }
+
+    private KnowledgeAnswer reuse(KnowledgeAnswer answer, String meetingId, long actor, MinutesView view,
+                                  String memoryKey, String question) {
+        checkUnchanged(meetingId, actor, view);
+        answer.setCached(true);
+        memory.add(memoryKey, List.of(new UserMessage(question), new AssistantMessage(answer.getAnswer())));
+        return answer;
     }
 
     /**

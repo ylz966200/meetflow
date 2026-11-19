@@ -55,6 +55,8 @@ public class PromptCall {
      * 生成请求标识，用于关联业务处理结果；历史数据可能为空。
      */
     private String requestKey;
+    /** 后台任务的批次 ID，用于查看同一批次各轮模型调用。 */
+    private String batchId;
     /**
      * 业务处理状态；历史调用没有关联请求时为空。
      */
