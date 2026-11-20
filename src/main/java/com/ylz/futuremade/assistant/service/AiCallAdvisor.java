@@ -43,6 +43,7 @@ public class AiCallAdvisor implements CallAdvisor {
         context.setLastCallId(id);
         long started = System.nanoTime();
         try {
+            if (context.getMeetingIds() != null) prompts.recordMeetingIds(id, context.getMeetingIds());
             prompts.recordInput(id, system, input);
             var result = chain.nextCall(request);
             var response = result.chatResponse();

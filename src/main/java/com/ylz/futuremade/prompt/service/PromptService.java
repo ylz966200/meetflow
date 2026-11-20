@@ -109,6 +109,11 @@ public class PromptService {
         mapper.finishCall(call);
     }
 
+    /** 保存跨会议模型调用的会议 ID 范围。 */
+    public void recordMeetingIds(long id, String meetingIds) {
+        mapper.updateMeetingIds(id, meetingIds);
+    }
+
     /**
      * 仅记录服务商返回的元数据；缺失字段保留为空，不以零代替未知值。
      */

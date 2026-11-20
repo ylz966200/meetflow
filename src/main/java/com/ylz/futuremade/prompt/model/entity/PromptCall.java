@@ -27,6 +27,8 @@ public class PromptCall {
      * 关联会议 ID。
      */
     private String meetingId;
+    /** 多会议调用的会议 ID 列表，以逗号分隔。 */
+    private String meetingIds;
     /**
      * 关联文字稿版本号；文字稿生成前的整理调用为空。
      */

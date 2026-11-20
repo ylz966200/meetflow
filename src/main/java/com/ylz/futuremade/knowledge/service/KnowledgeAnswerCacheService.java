@@ -2,6 +2,7 @@ package com.ylz.futuremade.knowledge.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.knowledge.model.dto.KnowledgeAnswer;
+import com.ylz.futuremade.knowledge.model.dto.MultiMeetingAnswer;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -73,6 +74,28 @@ public KnowledgeAnswerCacheService(StringRedisTemplate redis, ObjectMapper json,
             redis.opsForValue().set(key, json.writeValueAsString(value), ttl);
         } catch (Exception ex) {
             log.warn("知识问答缓存写入失败：{}", ex.getClass().getSimpleName());
+        }
+    }
+
+    /** 查询多会议问答缓存。 */
+    public MultiMeetingAnswer getMulti(String key) {
+        if (!enabled) return null;
+        try {
+            String value = redis.opsForValue().get(key);
+            return value == null ? null : json.readValue(value, MultiMeetingAnswer.class);
+        } catch (Exception ex) {
+            log.warn("多会议问答缓存读取失败：{}", ex.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    /** 保存多会议问答缓存。 */
+    public void putMulti(String key, MultiMeetingAnswer value) {
+        if (!enabled) return;
+        try {
+            redis.opsForValue().set(key, json.writeValueAsString(value), ttl);
+        } catch (Exception ex) {
+            log.warn("多会议问答缓存写入失败：{}", ex.getClass().getSimpleName());
         }
     }
 

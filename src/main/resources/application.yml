@@ -30,13 +30,15 @@ meetflow:
     enabled: ${MEETFLOW_KNOWLEDGE_CACHE_ENABLED:true}
     ttl: ${MEETFLOW_KNOWLEDGE_CACHE_TTL:24h}
   knowledge:
+    max-meetings: ${MEETFLOW_KNOWLEDGE_MAX_MEETINGS:5}
+    max-source-chars: ${MEETFLOW_KNOWLEDGE_MAX_SOURCE_CHARS:18000}
     milvus:
       # 仅在需要连接 Zilliz Cloud 时启用；Endpoint 使用 HTTPS 完整地址。
       enabled: ${MEETFLOW_MILVUS_ENABLED:false}
       endpoint: ${ZILLIZ_ENDPOINT:}
       token: ${ZILLIZ_TOKEN:}
       # 连接及单次只读请求超时，单位为秒。
-      timeout-seconds: ${ZILLIZ_TIMEOUT_SECONDS:10}
+      timeout-seconds: ${ZILLIZ_TIMEOUT_SECONDS:30}
   ai:
     # 已注册的 Spring ChatModel Bean 名称。
     default-model: ${MEETFLOW_AI_DEFAULT_MODEL:deepSeekChatModel}
@@ -112,3 +114,9 @@ logging:
     com.ylz.futuremade.prompt.mapper.PromptMapper.updateOutput: INFO
     com.ylz.futuremade.prompt.mapper.PromptMapper.updateToolTrace: INFO
     com.ylz.futuremade.prompt.mapper.PromptMapper.content: INFO
+    # 评测快照含会议问题、来源及回答，避免打印 SQL 参数和结果。
+    com.ylz.futuremade.evaluation.mapper.KnowledgeEvaluationRunMapper.insert: INFO
+    com.ylz.futuremade.evaluation.mapper.KnowledgeEvaluationRunMapper.saveResult: INFO
+    com.ylz.futuremade.evaluation.mapper.KnowledgeEvaluationRunMapper.finish: INFO
+    com.ylz.futuremade.evaluation.mapper.KnowledgeEvaluationRunMapper.find: INFO
+    com.ylz.futuremade.evaluation.mapper.KnowledgeEvaluationRunMapper.review: INFO

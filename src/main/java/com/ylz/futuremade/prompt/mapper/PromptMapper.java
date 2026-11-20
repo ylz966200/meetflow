@@ -46,6 +46,10 @@ public interface PromptMapper {
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insertCall(PromptCall call);
 
+    /** 写入跨会议调用的会议范围。 */
+    @Update("UPDATE mf_ai_call SET meeting_ids=#{meetingIds} WHERE id=#{id}")
+    int updateMeetingIds(@Param("id") long id, @Param("meetingIds") String meetingIds);
+
     @Update("UPDATE mf_ai_call SET status=#{status},duration_ms=#{durationMs},error_category=#{errorCategory} WHERE id=#{id} AND status=3")
     int finishCall(PromptCall call);
 
@@ -69,7 +73,7 @@ public interface PromptMapper {
 
     // 后台模型请求以批次 ID 关联任务，同步请求和历史记录沿用业务请求标识。
     @Select("""
-            SELECT c.id, c.scenario, c.prompt_version_id AS promptVersionId, c.meeting_id AS meetingId,
+            SELECT c.id, c.scenario, c.prompt_version_id AS promptVersionId, c.meeting_id AS meetingId, c.meeting_ids AS meetingIds,
                    c.transcript_version AS transcriptVersion, c.actor_id AS actorId, c.status, c.duration_ms AS durationMs,
                    c.error_category AS errorCategory, c.created_at AS createdAt, COALESCE(t.request_key, c.request_key) AS requestKey,
                    b.id AS batchId, c.outline_version AS outlineVersion, c.provider, c.model_name AS modelName,

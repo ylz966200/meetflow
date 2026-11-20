@@ -37,6 +37,28 @@ class SecurityConfigurationTest {
     @Autowired com.ylz.futuremade.meeting.service.TranscriptionService transcriptionService;
     @Autowired com.ylz.futuremade.prompt.mapper.PromptMapper promptMapper;
     @Autowired com.ylz.futuremade.prompt.service.PromptService promptService;
+    @Autowired com.ylz.futuremade.evaluation.mapper.KnowledgeEvaluationRunMapper knowledgeEvaluationRuns;
+
+    @Test void knowledgeEvaluationRecordRetainsAnswerAndAllowsOneReviewRetry() {
+        jdbc.execute("CREATE TABLE IF NOT EXISTS mf_knowledge_evaluation_run (id CHAR(36) PRIMARY KEY,dataset_version VARCHAR(64),case_id VARCHAR(100),actor_id BIGINT,meeting_ids VARCHAR(1024),status SMALLINT,error_stage VARCHAR(32),sample_json CLOB,result_json CLOB,source_checks_json CLOB,request_key CHAR(36),review CLOB,judge_call_id BIGINT,manual_review_status SMALLINT DEFAULT 0,manual_review_note VARCHAR(1000),created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.update("DELETE FROM mf_knowledge_evaluation_run");
+        var run = new com.ylz.futuremade.evaluation.model.entity.KnowledgeEvaluationRun();
+        run.setId("11111111-1111-4111-8111-111111111111"); run.setActorId(1L); run.setMeetingIds("meeting");
+        run.setDatasetVersion("1"); run.setCaseId("case"); run.setStatus(3); run.setSampleJson("{}");
+        knowledgeEvaluationRuns.insert(run);
+        run.setResultJson("{\"answer\":\"结果\"}"); run.setSourceChecksJson("[]");
+        knowledgeEvaluationRuns.saveResult(run);
+        run.setStatus(5); run.setErrorStage("JUDGE"); knowledgeEvaluationRuns.finish(run);
+        org.junit.jupiter.api.Assertions.assertEquals(1, knowledgeEvaluationRuns.claimReviewRetry(run.getId(), 1));
+        org.junit.jupiter.api.Assertions.assertEquals(0, knowledgeEvaluationRuns.claimReviewRetry(run.getId(), 1));
+        var stored = knowledgeEvaluationRuns.find(run.getId(), 1);
+        org.junit.jupiter.api.Assertions.assertTrue(stored.getResultJson().contains("结果"));
+        org.junit.jupiter.api.Assertions.assertEquals(0, knowledgeEvaluationRuns.review(run.getId(), 1, 1, "通过"));
+        run.setStatus(4); run.setErrorStage(null); knowledgeEvaluationRuns.finish(run);
+        org.junit.jupiter.api.Assertions.assertEquals(1, knowledgeEvaluationRuns.review(run.getId(), 1, 1, "通过"));
+        org.junit.jupiter.api.Assertions.assertEquals(1, knowledgeEvaluationRuns.find(run.getId(), 1).getManualReviewStatus());
+        org.junit.jupiter.api.Assertions.assertNull(knowledgeEvaluationRuns.find(run.getId(), 2));
+    }
 
     /** 使用真实网关与数据库，仅替换外部模型传输。 */
     private void modelRequest(com.ylz.futuremade.assistant.model.dto.AiCallContext context, boolean fail) {
@@ -80,7 +102,7 @@ class SecurityConfigurationTest {
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_prompt_scenario (code VARCHAR(64) PRIMARY KEY, name VARCHAR(100), active_version_id BIGINT)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_prompt_version (id BIGINT AUTO_INCREMENT PRIMARY KEY, scenario VARCHAR(64), version INT, content CLOB, change_note VARCHAR(500), created_by BIGINT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(scenario,version))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_prompt_release_audit (id BIGINT AUTO_INCREMENT PRIMARY KEY, scenario VARCHAR(64), old_version_id BIGINT, new_version_id BIGINT, actor_id BIGINT, reason VARCHAR(500), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
-        jdbc.execute("CREATE TABLE IF NOT EXISTS mf_ai_call (id BIGINT AUTO_INCREMENT PRIMARY KEY, scenario VARCHAR(64), prompt_version_id BIGINT, meeting_id CHAR(36), transcript_version INT, actor_id BIGINT, status SMALLINT, duration_ms BIGINT, error_category VARCHAR(64), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, request_key CHAR(36), outline_version INT, provider VARCHAR(32), model_name VARCHAR(128), provider_request_id VARCHAR(128), input_tokens INT, output_tokens INT, cached_tokens INT)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS mf_ai_call (id BIGINT AUTO_INCREMENT PRIMARY KEY, scenario VARCHAR(64), prompt_version_id BIGINT, meeting_id CHAR(36), meeting_ids VARCHAR(1024), transcript_version INT, actor_id BIGINT, status SMALLINT, duration_ms BIGINT, error_category VARCHAR(64), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, request_key CHAR(36), outline_version INT, provider VARCHAR(32), model_name VARCHAR(128), provider_request_id VARCHAR(128), input_tokens INT, output_tokens INT, cached_tokens INT)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS mf_ai_call_content (call_id BIGINT PRIMARY KEY, system_content CLOB NOT NULL, user_content CLOB NOT NULL, output_content CLOB, tool_trace CLOB, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
         jdbc.update("DELETE FROM mf_ai_call_content"); jdbc.update("DELETE FROM mf_ai_call"); jdbc.update("DELETE FROM mf_prompt_release_audit"); jdbc.update("DELETE FROM mf_prompt_version"); jdbc.update("DELETE FROM mf_prompt_scenario");
         jdbc.update("INSERT INTO mf_prompt_scenario VALUES ('MEETING_OUTLINE','会议大纲生成',1)");

@@ -130,24 +130,53 @@ async function setupKnowledge() {
     const root = el('content');
     root.innerHTML = `<div class="page-heading"><div><div class="section-kicker">KNOWLEDGE</div><h1>会议知识库</h1><p class="subtitle">选择会议，基于已确认纪要对话并追溯参考内容。</p></div></div><section class="panel"><label class="form-label">选择会议<select id="knowledge-meeting"><option value="">正在加载会议…</option></select></label><div class="meeting-pages"><button class="button outline" id="knowledge-prev">上一页</button><span id="knowledge-page"></span><button class="button outline" id="knowledge-next">下一页</button></div><p id="knowledge-status" class="tiny-note" role="status"></p><button type="button" class="button outline" id="knowledge-index" hidden>为历史纪要建立索引</button><button type="button" class="button outline" id="knowledge-retry" hidden>重试索引</button><div class="knowledge-chat"><div class="knowledge-chat-header"><div><strong>会议知识问答</strong><p class="tiny-note">记住本页面各会议最近四轮对话；刷新或离开后清除。</p></div><button type="button" class="button outline" id="knowledge-clear">清空对话</button></div><div id="knowledge-result" class="knowledge-chat-messages" role="log" aria-live="polite"></div><form id="knowledge-form" class="knowledge-compose"><label class="form-label" for="knowledge-question">输入问题</label><textarea id="knowledge-question" maxlength="1000" rows="2" placeholder="例如：会议确定了哪些事项？"></textarea><div><span class="tiny-note">Enter 发送，Shift + Enter 换行</span><button type="submit" class="button primary" id="knowledge-ask">发送</button></div></form></div></section>`;
     const select = el('knowledge-meeting'), status = el('knowledge-status'), retry = el('knowledge-retry'), result = el('knowledge-result');
-    const secondLabel = document.createElement('label');
-    secondLabel.className = 'form-label';
-    secondLabel.textContent = '对比会议（可选）';
-    const secondSelect = document.createElement('select');
-    secondSelect.add(new Option('单场会议问答', ''));
-    secondLabel.append(secondSelect);
-    select.closest('label').after(secondLabel);
-    const filter = document.createElement('input');
-    filter.type = 'search';
-    filter.placeholder = '筛选当前页会议';
-    filter.setAttribute('aria-label', '筛选当前页会议');
-    select.closest('label').before(filter);
-    function scope() { return secondSelect.value ? select.value + '|' + secondSelect.value : select.value; }
+    const picker = document.createElement('div');
+    const rows = document.createElement('div');
+    const actions = document.createElement('div'); actions.className = 'knowledge-selected-meetings';
+    const addMeeting = document.createElement('button'); addMeeting.type = 'button'; addMeeting.className = 'button outline'; addMeeting.textContent = '新增下拉框';
+    const confirmMeetings = document.createElement('button'); confirmMeetings.type = 'button'; confirmMeetings.className = 'button primary'; confirmMeetings.textContent = '确认会议';
+    const pickerStatus = document.createElement('p'); pickerStatus.className = 'tiny-note'; pickerStatus.setAttribute('role', 'status');
+    actions.append(addMeeting, confirmMeetings);
+    picker.append(rows, actions, pickerStatus);
+    select.closest('label').after(picker);
+    let confirmedIds = [], selectionDirty = true, pageRows = [];
+    function selectedIds() { return confirmedIds; }
+    function scope() { return [...confirmedIds].sort().join('|'); }
+    function draftSelects() { return [select, ...rows.querySelectorAll('select')]; }
+    function markSelectionDirty() {
+        selectionDirty = true;
+        pickerStatus.textContent = '会议选择有变更，请确认后提问。';
+    }
+    function fillSelect(target, meetings) {
+        const oldId = target.value, oldTitle = target.selectedOptions[0]?.text;
+        target.replaceChildren(new Option('请选择会议', ''));
+        meetings.forEach(meeting => target.add(new Option(meeting.title, meeting.id)));
+        if (oldId && !meetings.some(meeting => meeting.id === oldId)) target.add(new Option(oldTitle, oldId));
+        target.value = oldId;
+    }
+    addMeeting.onclick = () => {
+        const row = document.createElement('div'); row.className = 'knowledge-meeting-row';
+        const label = document.createElement('label'); label.className = 'form-label'; label.textContent = '选择会议';
+        const next = document.createElement('select'); next.className = 'knowledge-meeting-select';
+        label.append(next); fillSelect(next, pageRows);
+        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button outline'; remove.textContent = '移除';
+        next.onchange = markSelectionDirty;
+        remove.onclick = () => { row.remove(); markSelectionDirty(); };
+        row.append(label, remove); rows.append(row); markSelectionDirty();
+    };
+    confirmMeetings.onclick = () => {
+        const ids = draftSelects().map(item => item.value);
+        if (ids.some(id => !id)) { pickerStatus.textContent = '请先选择每个下拉框中的会议。'; return; }
+        if (new Set(ids).size !== ids.length) { pickerStatus.textContent = '请选择不同的会议。'; return; }
+        confirmedIds = ids; selectionDirty = false; chatEpoch++;
+        pickerStatus.textContent = `已确认 ${ids.length} 场会议。`;
+        renderConversation();
+    };
     const bypassLabel = document.createElement('label'); bypassLabel.className = 'tiny-note';
     const bypassCache = document.createElement('input'); bypassCache.type = 'checkbox';
     bypassLabel.append(bypassCache, document.createTextNode(' 跳过缓存重新生成'));
     el('knowledge-form').querySelector('div').prepend(bypassLabel);
-    let page = 1, statusTimer, chatEpoch = 0;
+    let page = 1, statusTimer, chatEpoch = 0, searchSequence = 0;
     const conversations = new Map();
     const conversationIds = new Map();
     function conversationId(id) {
@@ -157,10 +186,11 @@ async function setupKnowledge() {
     function renderConversation() {
         result.replaceChildren();
         const turns = conversations.get(scope()) || [];
-        if (!turns.length) { const hint = document.createElement('p'); hint.className = 'knowledge-empty'; hint.textContent = select.value ? '输入问题，开始了解这场会议。' : '请选择会议后开始提问。'; result.append(hint); return; }
+        if (!turns.length) { const hint = document.createElement('p'); hint.className = 'knowledge-empty'; hint.textContent = confirmedIds.length ? '输入问题，开始了解所选会议。' : '请选择并确认会议后开始提问。'; result.append(hint); return; }
         for (const turn of turns) {
             const user = document.createElement('div'); user.className = 'message user'; user.textContent = turn.question; result.append(user);
             const reply = document.createElement('div'); reply.className = 'message assistant'; reply.textContent = turn.answer; result.append(reply);
+            if (turn.missingMeetings?.length) { const note = document.createElement('p'); note.className = 'tiny-note'; note.textContent = '未召回纪要内容：' + turn.missingMeetings.join('、'); reply.append(note); }
             if (turn.cached) { const badge = document.createElement('p'); badge.className = 'tiny-note'; badge.textContent = '已复用缓存回答'; reply.append(badge); }
             if (turn.sources?.length) {
                 const details = document.createElement('details'); details.className = 'knowledge-sources';
@@ -179,33 +209,19 @@ async function setupKnowledge() {
         result.scrollTop = result.scrollHeight;
     }
     async function loadMeetings() {
+        const sequence = ++searchSequence;
         const response = await api(`/api/meetings?page=${page}&size=20`);
         if (!response.ok) throw new Error('会议列表加载失败。');
         const rows = await response.json();
-        if (!document.contains(select)) return;
-        const previousFirst = select.value, previousSecond = secondSelect.value;
-        const selectedFirst = select.selectedOptions[0]?.text, selectedSecond = secondSelect.selectedOptions[0]?.text;
-        select.replaceChildren(new Option('请选择会议', ''));
-        rows.forEach(meeting => select.add(new Option(meeting.title, meeting.id)));
-        if (previousFirst && !rows.some(meeting => meeting.id === previousFirst)) select.add(new Option(selectedFirst, previousFirst));
-        select.value = previousFirst;
-        secondSelect.replaceChildren(new Option('单场会议问答', ''));
-        rows.forEach(meeting => secondSelect.add(new Option(meeting.title, meeting.id)));
-        if (previousSecond && !rows.some(meeting => meeting.id === previousSecond)) secondSelect.add(new Option(selectedSecond, previousSecond));
-        secondSelect.value = previousSecond;
-        filter.dispatchEvent(new Event('input'));
+        if (!document.contains(select) || sequence !== searchSequence) return;
+        pageRows = rows;
+        draftSelects().forEach(target => fillSelect(target, rows));
         el('knowledge-page').textContent = `第 ${page} 页`;
         el('knowledge-prev').disabled = page === 1; el('knowledge-next').disabled = rows.length < 20;
         status.textContent = ''; retry.hidden = true; renderConversation();
     }
     el('knowledge-prev').onclick = () => { page--; loadMeetings().catch(error => status.textContent = error.message); };
     el('knowledge-next').onclick = () => { page++; loadMeetings().catch(error => status.textContent = error.message); };
-    filter.oninput = () => {
-        const keyword = filter.value.trim().toLocaleLowerCase();
-        for (const list of [select, secondSelect]) {
-            for (const option of list.options) option.hidden = !!option.value && option.value !== list.value && !option.text.toLocaleLowerCase().includes(keyword);
-        }
-    };
     async function showStatus() {
         clearTimeout(statusTimer);
         const id = select.value; retry.hidden = true; el('knowledge-index').hidden = true;
@@ -216,7 +232,7 @@ async function setupKnowledge() {
         if (!response.ok) { status.textContent = '无法查看索引状态，请确认你有该会议的纪要编辑权限。'; return; }
         const data = await response.json();
         const previous = conversations.get(id);
-        if (previous?.length && previous[0].minutesVersion !== data.minutesVersion) {
+        if (previous?.length && previous[0].meetings?.find(meeting => meeting.meetingId === id)?.minutesVersion !== data.minutesVersion) {
             conversations.delete(id); conversationIds.delete(id); chatEpoch++; renderConversation();
         }
         const states = {1: '等待执行', 2: '索引中', 4: '已完成', 5: '失败'};
@@ -225,14 +241,13 @@ async function setupKnowledge() {
         if (data.status === 1 || data.status === 2)
             statusTimer = setTimeout(() => { if (document.contains(select)) showStatus().catch(() => status.textContent = '索引状态加载失败。'); }, 5000);
     }
-    select.onchange = () => { chatEpoch++; renderConversation(); showStatus().catch(() => status.textContent = '索引状态加载失败。'); };
-    secondSelect.onchange = () => { chatEpoch++; renderConversation(); };
+    select.onchange = () => { markSelectionDirty(); showStatus().catch(() => status.textContent = '索引状态加载失败。'); };
     el('knowledge-clear').onclick = async () => {
         const id = select.value, selectedScope = scope(), turns = conversations.get(selectedScope) || [];
         if (!id) return;
         if (turns.length && conversationIds.has(selectedScope)) {
             try {
-                const response = await api(`/api/meetings/${encodeURIComponent(id)}/knowledge/memory/${secondSelect.value ? 'clear-between' : 'clear'}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({conversationId: conversationIds.get(selectedScope), minutesVersion: turns[0].minutesVersion, secondMeetingId: secondSelect.value || null, secondMinutesVersion: turns[0].secondMinutesVersion || null})});
+                const response = await api('/api/knowledge/memory/clear', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({conversationId: conversationIds.get(selectedScope), meetings: turns[0].meetings})});
                 if (!response.ok) throw new Error('清空会话记忆失败，请稍后重试。');
             } catch (error) { status.textContent = error.message; return; }
         }
@@ -257,9 +272,9 @@ async function setupKnowledge() {
     el('knowledge-question').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); el('knowledge-form').requestSubmit(); } };
     el('knowledge-form').onsubmit = async event => {
         event.preventDefault();
-        const id = select.value, secondId = secondSelect.value, selectedScope = scope(), question = el('knowledge-question').value.trim();
-        if (!id || !question) { status.textContent = '请选择会议并输入问题。'; return; }
-        if (id === secondId) { status.textContent = '请选择两场不同的会议。'; return; }
+        const id = select.value, ids = selectedIds(), selectedScope = scope(), question = el('knowledge-question').value.trim();
+        if (selectionDirty || !ids.length) { pickerStatus.textContent = '请选择并确认会议后再提问。'; return; }
+        if (!question) { status.textContent = '请输入问题。'; return; }
         const button = el('knowledge-ask'), epoch = chatEpoch;
         if (button.disabled) return;
         const turns = conversations.get(selectedScope) || [];
@@ -269,12 +284,12 @@ async function setupKnowledge() {
         const pendingQuestion = document.createElement('div'); pendingQuestion.className = 'message user'; pendingQuestion.textContent = question;
         const pending = document.createElement('div'); pending.className = 'message assistant'; pending.textContent = '正在检索并生成回答……'; result.append(pendingQuestion, pending); result.scrollTop = result.scrollHeight;
         try {
-            const response = await api(`/api/meetings/${encodeURIComponent(id)}/knowledge/${secondId ? 'answer-between' : 'answer'}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question, conversationId: session, minutesVersion: turns[0]?.minutesVersion || null, secondMeetingId: secondId || null, secondMinutesVersion: turns[0]?.secondMinutesVersion || null, bypassCache: bypassCache.checked})});
+            const meetings = turns[0]?.meetings || ids.map(meetingId => ({meetingId}));
+            const response = await api('/api/knowledge/answers', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question, conversationId: session, meetings, bypassCache: bypassCache.checked})});
             const data = await response.json();
             if (!response.ok) throw new Error(data.message || '问答失败，请检查权限和索引状态。');
             if (!document.contains(select) || conversationIds.get(selectedScope) !== session) return;
-            if (turns.length && (turns[0].minutesVersion !== data.minutesVersion || turns[0].secondMinutesVersion !== data.secondMinutesVersion)) { conversations.delete(selectedScope); conversationIds.delete(selectedScope); status.textContent = '纪要版本已变化，之前的对话已清除，请重新提问。'; renderConversation(); return; }
-            turns.push({question, answer: data.answer, minutesVersion: data.minutesVersion, secondMinutesVersion: data.secondMinutesVersion, sources: data.sources, cached: data.cached});
+            turns.push({question, answer: data.answer, meetings: data.meetings, sources: data.sources, missingMeetings: data.missingMeetings, cached: data.cached});
             conversations.set(selectedScope, turns);
             if (scope() === selectedScope) { el('knowledge-question').value = ''; renderConversation(); }
         } catch (error) { if (document.contains(select) && scope() === selectedScope && epoch === chatEpoch) { pending.textContent = error.message; pending.classList.add('knowledge-error'); } }
@@ -1774,6 +1789,12 @@ async function setupEvaluation() {
     root.innerHTML = `<div class="page-heading"><div><div class="section-kicker">EVALUATION</div><h1>会议评测集</h1><p class="subtitle">查看评测样本与预设答案；内容为虚构数据。</p></div><button class="button outline" id="evaluation-back">返回管理后台</button></div><div class="notice"><span>◈</span><div><b>样本查看</b><small>选择样本运行实际生成流程，再由豆包辅助评审；将创建标记为评测样本的会议并产生模型费用。</small></div></div><div class="home-grid"><section class="panel"><div class="panel-title"><h3>测试样本</h3><span id="evaluation-count" class="pill">加载中</span></div><label class="form-label">搜索样本<input id="evaluation-search" placeholder="搜索标题、类型或编号"></label><div id="evaluation-list" aria-live="polite"></div></section><section class="panel"><div id="evaluation-detail" aria-live="polite">请选择样本。</div></section></div>`;
     el('evaluation-back').onclick = () => setupAdmin();
     const list = el('evaluation-list'), detail = el('evaluation-detail'), search = el('evaluation-search');
+    const datasetPicker = document.createElement('select');
+    datasetPicker.className = 'knowledge-meeting-select';
+    datasetPicker.setAttribute('aria-label', '选择评测集');
+    datasetPicker.add(new Option('虚构会议生成评测', 'generation'));
+    datasetPicker.add(new Option('本地会议知识问答', 'knowledge'));
+    list.before(datasetPicker);
     const node = (tag, value, className) => {
         const element = document.createElement(tag);
         if (className) element.className = className;
@@ -1781,6 +1802,158 @@ async function setupEvaluation() {
         return element;
     };
     let cases = [];
+    let knowledgeDataset = null;
+    let datasetMode = 'generation';
+    function showKnowledgeCase(item) {
+        detail.replaceChildren();
+        detail.append(node('div', item.category + ' · ' + item.id, 'section-kicker'), node('h2', item.question));
+        const lookup = key => knowledgeDataset.meetings.find(meeting => meeting.key === key);
+        const names = item.meetingKeys.map(key => {
+            const meeting = lookup(key);
+            return meeting ? meeting.title + ' · 纪要版本 ' + meeting.minutesVersion : key;
+        });
+        detail.append(node('p', '会议：' + names.join('、'), 'tiny-note'));
+        detail.append(node('p', '审核状态：' + item.reviewStatus, 'tiny-note'));
+        if (item.history?.length) {
+            const history = document.createElement('details');
+            history.append(node('summary', '查看固定对话历史'));
+            history.append(node('pre', item.history.map(turn => '用户：' + turn.question + '\n助手：' + turn.answer).join('\n\n'), 'evaluation-transcript'));
+            detail.append(history);
+        }
+        if (item.historySource) detail.append(node('p', '历史调用 ' + item.historySource.aiCallId + '：' + item.historySource.note, 'tiny-note'));
+        const expected = document.createElement('section');
+        expected.className = 'evaluation-section';
+        expected.append(node('h3', '预期事实'));
+        if (!item.expectedFacts?.length) expected.append(node('p', '尚未标注，需人工核实。', 'tiny-note'));
+        else item.expectedFacts.forEach(fact => expected.append(node('p', fact)));
+        expected.append(node('h3', '预期来源'));
+        if (!item.expectedSources?.length) expected.append(node('p', '暂无预设来源。', 'tiny-note'));
+        else item.expectedSources.forEach(source => {
+            const meeting = lookup(source.meetingKey);
+            expected.append(node('p', (meeting?.title || source.meetingKey) + ' · 条目 ' + source.sectionIndex + ' · ' + source.title));
+        });
+        expected.append(node('p', '检查重点：' + item.expectedBehavior, 'tiny-note'));
+        detail.append(expected);
+        const run = document.createElement('section'); run.className = 'evaluation-section';
+        run.append(node('h3', '运行知识问答'), node('p', '使用固定会议版本和独立会话执行，再调用豆包辅助评审；模型调用可能产生费用，评审结果需要人工复核。', 'tiny-note'));
+        const historyMissing = !!item.historySource && !item.history?.length;
+        const button = node('button', '运行当前样本', 'button primary'); button.type = 'button'; button.disabled = historyMissing;
+        const retryReview = node('button', '重试豆包评审', 'button outline'); retryReview.type = 'button'; retryReview.hidden = true;
+        const output = node('pre', '', 'evaluation-transcript'); output.hidden = true;
+        const manualPanel = document.createElement('div'); manualPanel.hidden = true;
+        const manualNote = document.createElement('textarea'); manualNote.rows = 2; manualNote.maxLength = 1000; manualNote.placeholder = '人工复核备注（可选）'; manualNote.className = 'transcript-editor';
+        const pass = node('button', '标记通过', 'button outline'); pass.type = 'button';
+        const fail = node('button', '标记不通过', 'button outline'); fail.type = 'button';
+        manualPanel.append(manualNote, pass, fail);
+        let currentRun = null;
+        function showCurrentRun(record) {
+            currentRun = record;
+            retryReview.hidden = !(record.status === STATUS.FAILED && record.errorStage === 'JUDGE');
+            manualPanel.hidden = !record.resultJson || record.status === STATUS.RUNNING;
+            manualNote.value = record.manualReviewNote || '';
+            output.hidden = false;
+            output.textContent = displayRun(record);
+        }
+        function displayRun(record) {
+            const result = record.resultJson ? JSON.parse(record.resultJson) : null;
+            const checks = record.sourceChecksJson ? JSON.parse(record.sourceChecksJson) : [];
+            const sources = (result?.sources || []).map(source => source.meetingTitle + ' · 版本 ' + source.minutesVersion + ' · 条目 ' + source.sectionIndex + ' · ' + source.title).join('\n');
+            const matches = checks.map(check => (check.found ? '已召回：' : '未召回：') + check.meetingId + ' · ' + check.title).join('\n');
+            return '运行 ID：' + record.id + '\n状态：' + (STATUS_LABEL[record.status] || record.status) + (record.errorStage ? ' · 失败阶段：' + record.errorStage : '')
+                + '\n问答调用关联标识：' + (record.requestKey || '无') + '\n豆包评审调用 ID：' + (record.judgeCallId || '无')
+                + '\n\n检索问题：\n' + (result?.retrievalQuestion || '未生成')
+                + '\n\n实际回答：\n' + (result?.answer || '未生成')
+                + '\n\n实际来源：\n' + (sources || '无')
+                + '\n\n预期来源检查：\n' + (matches || '未设置或未完成检查')
+                + '\n\n未召回内容的会议：' + (result?.missingMeetings?.join('、') || '无')
+                + '\n\n豆包评审：\n' + (record.review || '未完成')
+                + '\n\n人工复核：' + ({0:'未复核', 1:'通过', 2:'不通过'}[record.manualReviewStatus] || '未复核')
+                + (record.manualReviewNote ? '\n备注：' + record.manualReviewNote : '');
+        }
+        button.onclick = async () => {
+            button.disabled = true; output.hidden = false; output.textContent = '正在运行，请稍候……';
+            try {
+                const response = await api('/api/admin/evaluation/knowledge-runs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({caseId:item.id})});
+                const record = await response.json();
+                if (!response.ok) throw new Error(record.message || '运行失败，请检查会议权限、纪要版本及索引状态。');
+                showCurrentRun(record);
+            } catch (error) { output.textContent = error.message || '运行失败。'; }
+            finally { button.disabled = historyMissing; }
+        };
+        retryReview.onclick = async () => {
+            retryReview.disabled = true;
+            try {
+                const response = await api('/api/admin/evaluation/knowledge-runs/' + encodeURIComponent(currentRun.id) + '/retry-review', {method:'POST'});
+                const record = await response.json();
+                if (!response.ok) throw new Error(record.message || '评审重试失败。');
+                showCurrentRun(record);
+            } catch (error) { output.textContent = error.message; }
+            finally { retryReview.disabled = false; }
+        };
+        async function saveManualReview(status) {
+            pass.disabled = fail.disabled = true;
+            try {
+                const response = await api('/api/admin/evaluation/knowledge-runs/' + encodeURIComponent(currentRun.id) + '/manual-review',
+                    {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status, note:manualNote.value})});
+                const record = await response.json();
+                if (!response.ok) throw new Error(record.message || '保存人工复核失败。');
+                showCurrentRun(record);
+            } catch (error) { output.textContent = error.message; }
+            finally { pass.disabled = fail.disabled = false; }
+        }
+        pass.onclick = () => saveManualReview(1);
+        fail.onclick = () => saveManualReview(2);
+        const history = document.createElement('details');
+        history.append(node('summary', '查看本样本最近运行记录'));
+        const historyContent = document.createElement('div'); history.append(historyContent);
+        history.ontoggle = async () => {
+            if (!history.open) return;
+            historyContent.textContent = '加载中……';
+            try {
+                const response = await api('/api/admin/evaluation/knowledge-runs');
+                if (!response.ok) throw new Error('读取评测记录失败。');
+                const records = (await response.json()).filter(record => record.caseId === item.id);
+                historyContent.replaceChildren();
+                if (!records.length) historyContent.append(node('p', '暂无运行记录。', 'tiny-note'));
+                for (const record of records) {
+                    const entry = document.createElement('details');
+                    entry.append(node('summary', (record.createdAt || '') + ' · ' + (STATUS_LABEL[record.status] || record.status)));
+                    const body = node('pre', '加载中……', 'evaluation-transcript'); entry.append(body);
+                    entry.ontoggle = async () => {
+                        if (!entry.open) return;
+                        try {
+                            const detailResponse = await api('/api/admin/evaluation/knowledge-runs/' + encodeURIComponent(record.id));
+                            if (!detailResponse.ok) throw new Error('记录不存在或会议权限已变化。');
+                            const runDetail = await detailResponse.json();
+                            body.textContent = displayRun(runDetail);
+                            const selectRun = node('button', '查看并复核', 'button outline'); selectRun.type = 'button';
+                            selectRun.onclick = () => showCurrentRun(runDetail);
+                            entry.querySelectorAll('button').forEach(old => old.remove());
+                            entry.append(selectRun);
+                            if (runDetail.status === STATUS.FAILED && runDetail.errorStage === 'JUDGE') {
+                                const retry = node('button', '重试豆包评审', 'button outline');
+                                retry.type = 'button';
+                                retry.onclick = async () => {
+                                    retry.disabled = true;
+                                    try {
+                                        const retryResponse = await api('/api/admin/evaluation/knowledge-runs/' + encodeURIComponent(record.id) + '/retry-review', {method:'POST'});
+                                        const retryResult = await retryResponse.json();
+                                        if (!retryResponse.ok) throw new Error(retryResult.message || '评审重试失败。');
+                                        body.textContent = displayRun(retryResult);
+                                        retry.hidden = retryResult.status !== STATUS.FAILED || retryResult.errorStage !== 'JUDGE';
+                                    } catch (error) { body.textContent = error.message; }
+                                    finally { retry.disabled = false; }
+                                };
+                                entry.append(retry);
+                            }
+                        } catch (error) { body.textContent = error.message; }
+                    };
+                    historyContent.append(entry);
+                }
+            } catch (error) { historyContent.textContent = error.message || '读取评测记录失败。'; }
+        };
+        run.append(button, retryReview, output, manualPanel, history); detail.append(run);
+    }
     function showCase(item) {
         detail.replaceChildren();
         detail.append(node('div', item.category + ' · ' + item.id, 'section-kicker'), node('h2', item.title));
@@ -1849,23 +2022,37 @@ async function setupEvaluation() {
     }
     function showList() {
         const keyword = search.value.trim().toLowerCase();
-        const filtered = cases.filter(item => (item.id + ' ' + item.title + ' ' + item.category).toLowerCase().includes(keyword));
+        const filtered = cases.filter(item => (item.id + ' ' + (item.title || item.question || '') + ' ' + item.category).toLowerCase().includes(keyword));
         el('evaluation-count').textContent = filtered.length + ' 条';
         list.replaceChildren();
         if (!filtered.length) list.append(node('p', '没有匹配的样本。', 'tiny-note'));
         for (const item of filtered) {
             const button = document.createElement('button'); button.type = 'button';button.className = 'evaluation-case';
-            button.append(node('strong', item.title), node('span', item.category + ' · ' + item.transcript.length + ' 条发言', 'tiny-note'));
-            button.onclick = () => showCase(item);list.append(button);
+            button.append(node('strong', item.title || item.question), node('span', item.category + (datasetMode === 'generation' ? ' · ' + item.transcript.length + ' 条发言' : ' · ' + item.reviewStatus), 'tiny-note'));
+            button.onclick = () => datasetMode === 'generation' ? showCase(item) : showKnowledgeCase(item);list.append(button);
         }
     }
-    try {
-        const response = await api('/api/admin/evaluation/dataset');
+    async function loadDataset() {
+        datasetMode = datasetPicker.value;
+        root.querySelector('.subtitle').textContent = datasetMode === 'generation'
+            ? '查看虚构会议样本与预设答案。'
+            : '查看本地会议知识问答样本及待复核的预期。';
+        root.querySelector('.notice small').textContent = datasetMode === 'generation'
+            ? '选择样本运行实际生成流程，再由豆包辅助评审；会创建评测会议并产生模型费用。'
+            : '样本来自本地会议。执行会调用知识问答服务并可能产生模型费用，预期事实仍需人工复核。';
+        list.textContent = '加载中……'; detail.textContent = '请选择样本。';
+        const mode = datasetMode;
+        const response = await api(mode === 'generation' ? '/api/admin/evaluation/dataset' : '/api/admin/evaluation/knowledge-dataset');
         if (!response.ok) throw new Error('读取评测集失败，请确认管理员权限。');
         const dataset = await response.json();
-        if (!document.contains(root) || !el('evaluation-list')) return;
-        cases = dataset.cases;search.addEventListener('input', showList);showList();if(cases.length)showCase(cases[0]);
-    } catch (error) {
+        if (!document.contains(root) || !el('evaluation-list') || mode !== datasetPicker.value) return;
+        if (mode === 'knowledge') knowledgeDataset = dataset;
+        cases = dataset.cases; showList();
+        if (cases.length) mode === 'generation' ? showCase(cases[0]) : showKnowledgeCase(cases[0]);
+    }
+    search.addEventListener('input', showList);
+    datasetPicker.onchange = () => loadDataset().catch(error => list.textContent = error.message || '读取评测集失败。');
+    try { await loadDataset(); } catch (error) {
         if (document.contains(root) && el('evaluation-list')) list.textContent = error.message || '读取评测集失败。';
     }
 }
@@ -2290,7 +2477,7 @@ async function setupPrompts() {
             callList.replaceChildren();
             if (!calls.length) callList.textContent = '暂无调用记录';
             calls.forEach(x => {
-                const item = row(callList, `#${x.id}${x.requestKey ? " · 请求 " + x.requestKey : ""}${x.batchId ? " · 批次 " + x.batchId : ""} · ${x.createdAt || ''} · ${x.scenario} · ${x.provider || '供应商未知'}/${x.modelName || '模型未知'} · 提示词版本 ID ${x.promptVersionId} · 模型 ${STATUS_LABEL[x.status] || x.status} · 业务 ${STATUS_LABEL[x.businessStatus] || '历史数据未知'}${x.resultVersion != null ? ' · 产物版本 ' + x.resultVersion : ''} · Token 输入 ${x.inputTokens ?? '未知'} / 输出 ${x.outputTokens ?? '未知'} / 缓存 ${x.cachedTokens ?? '未知'} · ${x.durationMs ?? '—'} ms`);
+                const item = row(callList, `#${x.id}${x.requestKey ? " · 请求 " + x.requestKey : ""}${x.batchId ? " · 批次 " + x.batchId : ""}${x.meetingIds ? " · 会议 " + x.meetingIds : ""} · ${x.createdAt || ''} · ${x.scenario} · ${x.provider || '供应商未知'}/${x.modelName || '模型未知'} · 提示词版本 ID ${x.promptVersionId} · 模型 ${STATUS_LABEL[x.status] || x.status} · 业务 ${STATUS_LABEL[x.businessStatus] || '历史数据未知'}${x.resultVersion != null ? ' · 产物版本 ' + x.resultVersion : ''} · Token 输入 ${x.inputTokens ?? '未知'} / 输出 ${x.outputTokens ?? '未知'} / 缓存 ${x.cachedTokens ?? '未知'} · ${x.durationMs ?? '—'} ms`);
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'button outline';

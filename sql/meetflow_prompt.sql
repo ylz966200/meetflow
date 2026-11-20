@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS mf_ai_call (
  scenario VARCHAR(64) NOT NULL COMMENT '业务场景编码',
  prompt_version_id BIGINT NOT NULL COMMENT '调用时使用的提示词版本主键，关联 mf_prompt_version.id',
  meeting_id CHAR(36) NOT NULL COMMENT '关联会议 ID',
+ meeting_ids VARCHAR(1024) NULL COMMENT '多会议调用的会议ID列表，以逗号分隔',
  transcript_version INT NULL COMMENT '关联文字稿版本号，文字稿生成前的整理调用为空',
  actor_id BIGINT NOT NULL COMMENT '发起人用户 ID',
  status SMALLINT NOT NULL COMMENT '业务状态码，参见 BusinessStatus 枚举',

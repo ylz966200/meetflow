@@ -61,6 +61,16 @@ public class MeetingController {
         return meetings.list(service.userId(principal.getName()), size, (page - 1) * size);
     }
 
+    /** 按名称分页搜索当前用户可访问的会议。 */
+    @GetMapping("/search")
+    public List<MeetingMapper.Meeting> search(Principal principal, @RequestParam(defaultValue = "") String query,
+                                               @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "20") int size) {
+        if (page < 1 || page > 10000 || size < 1 || size > 100 || query.length() > 200)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "搜索参数无效");
+        String pattern = "%" + query.strip().replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
+        return meetings.search(service.userId(principal.getName()), pattern, size, (page - 1) * size);
+    }
+
     /**
      * 查询当前用户可访问的会议详情。
      */

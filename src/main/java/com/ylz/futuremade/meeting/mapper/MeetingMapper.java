@@ -13,6 +13,10 @@ public interface MeetingMapper {
     @Select("SELECT m.id, m.title, m.meeting_time AS meetingTime, m.created_at AS createdAt FROM mf_meeting m WHERE m.owner_id = #{ownerId} OR EXISTS (SELECT 1 FROM mf_meeting_member mm WHERE mm.meeting_id = m.id AND mm.user_id = #{ownerId}) ORDER BY m.created_at DESC, m.id DESC LIMIT #{limit} OFFSET #{offset}")
     List<Meeting> list(@Param("ownerId") long ownerId, @Param("limit") int limit, @Param("offset") int offset);
 
+    /** 在用户有权访问的会议中按名称分页搜索。 */
+    @Select("SELECT m.id, m.title, m.meeting_time AS meetingTime, m.created_at AS createdAt FROM mf_meeting m WHERE (m.owner_id = #{ownerId} OR EXISTS (SELECT 1 FROM mf_meeting_member mm WHERE mm.meeting_id = m.id AND mm.user_id = #{ownerId})) AND m.title LIKE #{pattern} ESCAPE '!' ORDER BY m.created_at DESC, m.id DESC LIMIT #{limit} OFFSET #{offset}")
+    List<Meeting> search(@Param("ownerId") long ownerId, @Param("pattern") String pattern, @Param("limit") int limit, @Param("offset") int offset);
+
     @Select("SELECT m.id, m.title, m.meeting_time AS meetingTime, m.created_at AS createdAt FROM mf_meeting m WHERE m.id = #{id} AND (m.owner_id = #{ownerId} OR EXISTS (SELECT 1 FROM mf_meeting_member mm WHERE mm.meeting_id = m.id AND mm.user_id = #{ownerId}))")
     Meeting find(@Param("id") String id, @Param("ownerId") long ownerId);
 

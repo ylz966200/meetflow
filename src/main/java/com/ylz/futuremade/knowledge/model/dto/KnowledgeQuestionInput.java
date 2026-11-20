@@ -23,4 +23,6 @@ public class KnowledgeQuestionInput {
      * 当前会议已确认纪要中的检索结果。
      */
     private List<KnowledgeSource> sources;
+    /** 未召回纪要内容的会议名称，多会议问答时使用。 */
+    private List<String> missingMeetings;
 }

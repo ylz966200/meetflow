@@ -7,6 +7,7 @@ import com.ylz.futuremade.assistant.service.AiModelGateway;
 import com.ylz.futuremade.evaluation.model.dto.EvaluationJudgeInput;
 import com.ylz.futuremade.evaluation.model.dto.EvaluationJudgeRequest;
 import com.ylz.futuremade.evaluation.model.dto.EvaluationJudgeResponse;
+import com.ylz.futuremade.evaluation.model.dto.KnowledgeEvaluationJudgeInput;
 import com.ylz.futuremade.prompt.service.PromptService;
 import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
 
@@ -64,6 +65,21 @@ public class EvaluationJudgeService {
         } catch (Exception ex) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "豆包评审失败，请查看调用记录", ex);
         }
+    }
+    /** 使用豆包评审知识问答及来源检查，记录独立模型调用。 */
+    public EvaluationJudgeResponse judgeKnowledge(KnowledgeEvaluationJudgeInput input, long actor, String meetingIds, String requestKey) throws Exception {
+        models.model(judgeModel);
+        var prompt = prompts.active(PromptScenarioCode.KNOWLEDGE_EVALUATION_JUDGE.code());
+        var audit = new AiCallContext(prompt, null, null, actor, requestKey, null);
+        audit.setMeetingIds(meetingIds);
+        var result = models.call(judgeModel, audit, json.writeValueAsString(input));
+        String output = result.getResult().getOutput().getText();
+        if (output == null || output.isBlank() || result.hasFinishReasons(Set.of("length", "LENGTH")))
+            throw new IllegalStateException("知识问答评审结果为空或被截断");
+        var response = new EvaluationJudgeResponse();
+        response.setCallId(audit.getLastCallId());
+        response.setReview(output);
+        return response;
     }
     /** 在执行可能产生费用的生成流程前检查评审模型与提示词配置。 */
     public com.ylz.futuremade.prompt.model.entity.PromptVersion ensureAvailable() {

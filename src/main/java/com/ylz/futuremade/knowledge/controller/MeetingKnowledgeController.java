@@ -73,22 +73,6 @@ public class MeetingKnowledgeController {
         return knowledge.answer(id, actor, input.getQuestion(), input.getConversationId(), view.getVersion(), Boolean.TRUE.equals(input.getBypassCache()));
     }
 
-    /** 在两场均有纪要权限且索引已完成的会议中检索并回答。 */
-    @PostMapping("/answer-between")
-    public KnowledgeAnswer answerBetween(@PathVariable String id, @RequestBody KnowledgeQuestion input, Principal principal) throws Exception {
-        long actor = meetings.userId(principal.getName());
-        String second = input.getSecondMeetingId();
-        if (second == null || second.isBlank() || second.equals(id))
-            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "请选择两场不同的会议");
-        for (String meeting : java.util.List.of(id, second)) {
-            var view = minutes.get(meeting, actor, null);
-            var task = tasks.latest(meeting);
-            if (task == null || tasks.version(task) != view.getVersion() || task.getStatus() != GenerationTaskStatus.SUCCEEDED.code())
-                throw new ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT, "所选会议的最新纪要索引尚未完成");
-        }
-        return knowledge.answerBetween(id, meetings.title(id, actor), second, meetings.title(second, actor), actor, input);
-    }
-
     /**
      * 清除当前用户在指定会议和纪要版本下的短期会话记忆。
      */
@@ -99,15 +83,6 @@ public class MeetingKnowledgeController {
         if (input.getMinutesVersion() == null || input.getMinutesVersion() < 1)
             throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "纪要版本无效");
         knowledge.clearMemory(id, actor, input.getMinutesVersion(), input.getConversationId());
-    }
-
-    /** 清除当前用户在两场会议及其纪要版本下的会话记忆。 */
-    @PostMapping("/memory/clear-between")
-    public void clearBetween(@PathVariable String id, @RequestBody KnowledgeQuestion input, Principal principal) {
-        if (input.getSecondMeetingId() == null || input.getMinutesVersion() == null || input.getSecondMinutesVersion() == null)
-            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "会议及纪要版本不能为空");
-        knowledge.clearBetween(id, input.getSecondMeetingId(), meetings.userId(principal.getName()),
-                input.getMinutesVersion(), input.getSecondMinutesVersion(), input.getConversationId());
     }
 
     /**

@@ -40,4 +40,7 @@ public class AiCallContext {
      */
     @Setter
     private Long lastCallId;
+    /** 多会议调用涉及的会议 ID，按逗号分隔。 */
+    @Setter
+    private String meetingIds;
 }

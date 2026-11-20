@@ -9,8 +9,6 @@ import lombok.Setter;
 public class KnowledgeAnswer {
     /** 已确认的会议纪要版本。 */
     private int minutesVersion;
-    /** 第二场会议纪要版本，单会议问答时为空。 */
-    private Integer secondMinutesVersion;
     /** 生成的回答，索引操作时为空。 */
     private String answer;
     /** 本次提供给模型的参考纪要条目。 */
