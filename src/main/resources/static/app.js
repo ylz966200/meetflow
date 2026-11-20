@@ -618,11 +618,14 @@ async function openMeeting(id) {
         tablist.setAttribute('aria-label', '会议详情');
         const paneContainer = document.createElement('div');
         paneContainer.className = 'meeting-tab-content';
+        const oaPanel = document.createElement('section');
+        oaPanel.className = 'panel';
+        oaPanel.innerHTML = '<div class="oa-heading"><div><span class="section-kicker">ACTION ITEMS</span><h3>会议待办</h3><p class="subtitle">核对会议行动项，创建待办并跟进执行进度。</p></div><span class="oa-heading-tag">本地待办</span></div><p id="oa-message" class="oa-message" role="status"></p><section class="oa-section"><div class="oa-section-heading"><div><h4>待确认的行动项</h4><p>确认内容、负责人和截止日期后创建待办。</p></div></div><div id="oa-actions" class="oa-action-list"></div></section><section class="oa-section oa-tasks-section"><div class="oa-section-heading"><div><h4>待办列表</h4><p>查看已创建事项及执行状态。</p></div></div><div id="oa-task-list" class="oa-task-list"></div></section>';
         const steps = [
             {key: 'transcript', label: '文字稿', number: '01', node: transcriptPanel},
             {key: 'outline', label: '会议大纲', number: '02', node: outlinePanel},
             {key: 'minutes', label: '纪要与行动项', number: '03', node: minutesPanel},
-            {key: 'oa', label: 'OA 同步', number: '04', placeholder: 'OA 同步功能尚未接入，后续将在这里确认并跟进任务。'},
+            {key: 'oa', label: 'OA 同步', number: '04', node: oaPanel},
             {key: 'members', label: '成员与权限', number: '05', node: memberPanel}
         ];
         grid.before(tablist, paneContainer);
@@ -795,7 +798,8 @@ async function openMeeting(id) {
         if (currentRole === 'ORGANIZER' || currentRole === 'EDITOR') {
             const tabLoaders = {
                 outline: () => setupOutline(id, currentRole, () => version, () => editor.value !== saved),
-                minutes: () => setupMinutes(id, currentRole, () => editor.value !== saved)
+                minutes: () => setupMinutes(id, currentRole, () => editor.value !== saved),
+                oa: () => setupOaTasks(id, currentRole)
             };
             const tabStates = {};
             loadMeetingTab = async key => {
@@ -809,11 +813,14 @@ async function openMeeting(id) {
                         state.initialized = true;
                     } else if (state.refresh) await state.refresh();
                 } catch (error) {
-                    const target = el(key === 'outline' ? 'outline-message' : 'minutes-message');
+                    const target = el(key === 'outline' ? 'outline-message' : key === 'oa' ? 'oa-message' : 'minutes-message');
                     if (target) target.textContent = error.message || '页面加载失败，请重试。';
                 } finally { state.loading = false; }
             };
             loadMeetingTab(steps[activeTabIndex].key);
+        }
+        if (currentRole === 'VIEWER') {
+            loadMeetingTab = key => { if (key === 'oa') setupOaTasks(id, currentRole).catch(error => el('oa-message').textContent = error.message); };
         }
         if (currentRole === 'ORGANIZER' || currentRole === 'EDITOR') setupTranscription(id, editor, () => version);
         else {
@@ -1494,6 +1501,131 @@ async function setupTranscription(id, editor, transcriptVersion) {
     scheduleRefresh();
 }
 
+async function setupOaTasks(meetingId, role) {
+    const base = `/api/meetings/${encodeURIComponent(meetingId)}/oa`;
+    const canCreate = role === 'ORGANIZER' || role === 'EDITOR';
+    async function request(path, options) {
+        const response = await api(path, options);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.message || '待办操作失败');
+        }
+        return response.json();
+    }
+    async function refresh() {
+        const tasks = await request(`${base}/tasks`);
+        const taskList = el('oa-task-list');
+        taskList.replaceChildren();
+        const statusNames = {1: '待处理', 2: '进行中', 3: '已完成', 4: '已取消'};
+        if (!tasks.length) taskList.innerHTML = '<div class="oa-empty">暂无待办，确认行动项后将在这里跟进。</div>';
+        for (const task of tasks) {
+            const row = document.createElement('div');
+            row.className = 'oa-task-card';
+            const taskHeader = document.createElement('div');
+            taskHeader.className = 'oa-task-header';
+            const taskTitle = document.createElement('strong');
+            taskTitle.className = 'oa-task-title';
+            taskTitle.textContent = task.content;
+            const taskStatus = document.createElement('span');
+            taskStatus.className = `oa-status oa-status-${task.status}`;
+            taskStatus.textContent = statusNames[task.status] || '未知';
+            taskHeader.append(taskTitle, taskStatus);
+            const description = document.createElement('p');
+            description.className = 'oa-task-meta';
+            description.textContent = `负责人：${task.assigneeUsername}　·　截止：${task.dueDate}　·　来源纪要版本 ${task.minutesVersion}`;
+            row.append(taskHeader, description);
+            const history = document.createElement('details');
+            history.className = 'oa-task-history';
+            const summary = document.createElement('summary');
+            summary.textContent = '查看状态记录';
+            history.append(summary);
+            history.addEventListener('toggle', async () => {
+                if (!history.open || history.dataset.loaded) return;
+                try {
+                    const entries = await request(`${base}/tasks/${encodeURIComponent(task.id)}/history`);
+                    for (const entry of entries) {
+                        const line = document.createElement('p');
+                        line.textContent = `${entry.createdAt || ''} · 用户 ${entry.actorId} · ${entry.previousStatus == null ? '创建' : statusNames[entry.previousStatus]} → ${statusNames[entry.status]}`;
+                        history.append(line);
+                    }
+                    history.dataset.loaded = 'true';
+                } catch (error) { el('oa-message').textContent = error.message; }
+            });
+            row.append(history);
+            if (canCreate || task.assigneeUsername === currentUser) {
+                const transitions = task.status === 1 ? [[2, '开始处理'], [3, '完成'], [4, '取消']] : task.status === 2 ? [[3, '完成'], [4, '取消']] : task.status === 3 ? [[2, '重新打开']] : [];
+                const controls = document.createElement('div');
+                controls.className = 'oa-task-controls';
+                for (const [target, label] of transitions) {
+                    const button = document.createElement('button');
+                    button.type = 'button'; button.className = 'button outline'; button.textContent = label;
+                    button.onclick = async () => {
+                        button.disabled = true;
+                        try {
+                            await request(`${base}/tasks/${encodeURIComponent(task.id)}/status`, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({expectedStatus: task.status, status: target})});
+                            await refresh();
+                        } catch (error) { el('oa-message').textContent = error.message; button.disabled = false; }
+                    };
+                    controls.append(button);
+                }
+                if (transitions.length) row.append(controls);
+            }
+            taskList.append(row);
+        }
+        const actionList = el('oa-actions');
+        actionList.replaceChildren();
+        if (!canCreate) {
+            actionList.closest('.oa-section').hidden = true;
+            el('oa-message').textContent = '可查看会议待办；负责人可以更新自己的待办状态。';
+            return;
+        }
+        let preview;
+        try { preview = await request(`${base}/actions`); }
+        catch (error) { el('oa-message').textContent = error.message; return; }
+        const members = await request(`/api/meetings/${encodeURIComponent(meetingId)}/members`);
+        const created = new Set(tasks.filter(task => task.minutesVersion === preview.minutesVersion).map(task => task.actionIndex));
+        el('oa-message').textContent = `纪要版本 ${preview.minutesVersion} · ${preview.actions.length} 条行动项；请确认内容、负责人和截止日期。`;
+        preview.actions.forEach((action, index) => {
+            const form = document.createElement('form'); form.className = 'oa-action-card';
+            const heading = document.createElement('div'); heading.className = 'oa-action-heading';
+            const headingTitle = document.createElement('strong'); headingTitle.textContent = `行动项 ${String(index + 1).padStart(2, '0')}`;
+            const badge = document.createElement('span'); badge.className = `oa-action-badge${created.has(index) ? ' is-created' : ''}`;
+            badge.textContent = created.has(index) ? '已创建' : action.needsReview ? '需要核对' : '待确认';
+            heading.append(headingTitle, badge);
+            const fields = document.createElement('div'); fields.className = 'oa-action-fields';
+            const contentLabel = document.createElement('label'); contentLabel.className = 'oa-field oa-field-content'; contentLabel.textContent = '待办内容';
+            const content = document.createElement('textarea'); content.value = action.content || ''; content.required = true; content.maxLength = 5000; content.rows = 2; contentLabel.append(content);
+            const assigneeLabel = document.createElement('label'); assigneeLabel.className = 'oa-field'; assigneeLabel.textContent = '负责人';
+            const assignee = document.createElement('select'); assignee.required = true;
+            const empty = document.createElement('option'); empty.value = ''; empty.textContent = '请选择会议成员'; assignee.append(empty);
+            for (const member of members.filter(item => item.enabled)) {
+                const option = document.createElement('option'); option.value = member.username; option.textContent = member.username; assignee.append(option);
+            }
+            assigneeLabel.append(assignee);
+            const dateLabel = document.createElement('label'); dateLabel.className = 'oa-field'; dateLabel.textContent = '截止日期';
+            const due = document.createElement('input'); due.type = 'date'; due.required = true; dateLabel.append(due);
+            fields.append(contentLabel, assigneeLabel, dateLabel);
+            const footer = document.createElement('div'); footer.className = 'oa-action-footer';
+            const note = document.createElement('p'); note.className = 'oa-action-note'; note.textContent = `纪要识别：负责人 ${action.assignee || '未明确'} · 时间 ${action.deadline || '未明确'}${action.needsReview ? ' · 需人工核对' : ''}`;
+            const button = document.createElement('button'); button.type = 'submit'; button.className = 'button primary'; button.textContent = created.has(index) ? '已创建' : '确认创建待办'; button.disabled = created.has(index);
+            footer.append(note, button);
+            form.append(heading, fields, footer);
+            form.onsubmit = async event => {
+                event.preventDefault();
+                if (!window.confirm('确认按当前填写的信息创建本地待办？')) return;
+                button.disabled = true;
+                try {
+                    await request(`${base}/tasks`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({minutesVersion: preview.minutesVersion, actionIndex: index, content: content.value, assigneeUsername: assignee.value, dueDate: due.value})});
+                    await refresh();
+                } catch (error) { el('oa-message').textContent = error.message; button.disabled = false; }
+            };
+            actionList.append(form);
+        });
+        if (!preview.actions.length) actionList.innerHTML = '<div class="oa-empty">当前纪要没有待确认的行动项。</div>';
+    }
+    await refresh();
+    return refresh;
+}
 async function setupMinutes(id, role, transcriptDirty) {
     const panel = el('minutes-panel'), editor = el('minutes-content'), message = el('minutes-message');
     const buttons = ['minutes-generate', 'minutes-save', 'minutes-confirm'].map(el);
@@ -2219,6 +2351,7 @@ async function setupOutline(id, role, transcriptVersion, transcriptDirty) {
         currentTask=task;
         const states={1:'等待执行',2:task.succeededBatches>=task.totalBatches-1?'归并中':'分段提取中',3:'部分失败',4:'已完成',5:'来源或权限已变化',6:'已取消'};
         taskInfo.textContent='大纲后台任务：'+(states[task.status] || '未知状态')+' · 已完成 '+task.succeededBatches+' / '+task.totalBatches+' 个处理阶段'+(task.failedBatches?' · 失败 '+task.failedBatches+' 个':'');
+        if (task.errorCode === 'SUSPICIOUS_EMPTY') taskInfo.textContent += ' · 较长分段两次未提取到内容，请检查文字稿后重试。';
         retryButton.classList.toggle('hidden',task.status!==3 || task.failedBatches===0);
         clearTimeout(taskTimer);
         if(task.status===1 || task.status===2) {
