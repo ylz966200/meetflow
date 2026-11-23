@@ -2252,16 +2252,29 @@ async function setupOutline(id, role, transcriptVersion, transcriptDirty) {
         const body = details.querySelector('.outline-source-body');
         body.textContent = '正在加载来源……';
         try {
-            const response = await api(`${baseUrl}/sources`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({version: outlineVersion, itemIds: row.sourceIds})});
-            if (!response.ok) throw new Error('来源读取失败，请重新打开后重试。');
-            const data = await response.json();
+            const version = outlineVersion;
+            const ids = [...row.sourceIds];
+            const sourcePageSize = 200; // 与来源接口单次候选编号上限一致。
+            const candidates = [];
+            const segmentsByIndex = new Map();
+            for (let start = 0; start < ids.length; start += sourcePageSize) {
+                const response = await api(`${baseUrl}/sources`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({version, itemIds: ids.slice(start, start + sourcePageSize)})
+                });
+                if (!response.ok) throw new Error('来源读取失败，请重新打开后重试。');
+                const data = await response.json();
+                candidates.push(...data.items);
+                for (const segment of data.segments) segmentsByIndex.set(segment.segmentIndex, segment);
+            }
             body.replaceChildren();
-            for (const candidate of data.items) {
+            for (const candidate of candidates) {
                 const section = document.createElement('div'), content = document.createElement('p');
                 content.textContent = candidate.content + (candidate.needsReview ? '（待确认）' : ''); section.append(content);
                 for (const index of candidate.evidenceIndices || []) {
                     const line = document.createElement('p'); line.className = 'tiny-note';
-                    const segment = data.segments.find(item => item.segmentIndex === index);
+                    const segment = segmentsByIndex.get(index);
                     line.textContent = `文字稿片段 ${index + 1}：${segment?.text || '来源片段不可用'}`; section.append(line);
                 }
                 const move = document.createElement('select'); move.setAttribute('aria-label', '移动关联内容到其他大纲');
@@ -2349,10 +2362,12 @@ async function setupOutline(id, role, transcriptVersion, transcriptDirty) {
     async function showTask(task) {
         if(!document.contains(panel) || !task)return;
         currentTask=task;
-        const states={1:'等待执行',2:task.succeededBatches>=task.totalBatches-1?'归并中':'分段提取中',3:'部分失败',4:'已完成',5:'来源或权限已变化',6:'已取消'};
-        taskInfo.textContent='大纲后台任务：'+(states[task.status] || '未知状态')+' · 已完成 '+task.succeededBatches+' / '+task.totalBatches+' 个处理阶段'+(task.failedBatches?' · 失败 '+task.failedBatches+' 个':'');
-        if (task.errorCode === 'SUSPICIOUS_EMPTY') taskInfo.textContent += ' · 较长分段两次未提取到内容，请检查文字稿后重试。';
-        retryButton.classList.toggle('hidden',task.status!==3 || task.failedBatches===0);
+        const states={1:'等待执行',2:task.totalBatches>0 && task.succeededBatches>=task.totalBatches?'归并中':'分段提取中',3:'部分失败',4:'已完成',5:'来源或权限已变化',6:'已取消'};
+        taskInfo.textContent='大纲后台任务：'+(states[task.status] || '未知状态')+' · 已完成 '+task.succeededBatches+' / '+task.totalBatches+' 个分段'+(task.failedBatches?' · 失败 '+task.failedBatches+' 个':'');
+        const emptyChunks = (task.suspiciousChunks || []).join('、');
+        if (emptyChunks) taskInfo.textContent += ` · 第 ${emptyChunks} 段未提取到内容，可根据需要核对原文。`;
+        retryButton.classList.toggle('hidden',task.status!==3 || (task.failedBatches===0 && task.errorCode!=='GRAPH_FAILED'));
+        if (task.errorCode === 'GRAPH_FAILED') taskInfo.textContent += ' · 大纲流程执行失败，可重试。';
         clearTimeout(taskTimer);
         if(task.status===1 || task.status===2) {
             taskTimer=setTimeout(async()=>{try{await showTask(await requestTask('/'+encodeURIComponent(task.taskId)));}catch(error){if(document.contains(panel))taskInfo.textContent=error.message;}},5000);
@@ -2365,6 +2380,8 @@ async function setupOutline(id, role, transcriptVersion, transcriptDirty) {
                 await render(data);
                 message.textContent=(data.version===task.resultVersion?'后台大纲草稿已生成。':'大纲已更新，已加载最新版本。')+(data.partialGrouping?' 部分候选内容未完成跨批次归并，请人工检查并调整。':'');
             }
+        } else if(task.status===4 && task.resultVersion===0) {
+            message.textContent='本次文字稿未提取到会议内容，未生成新大纲。';
         } else if(task.status===5) message.textContent='文字稿、大纲或权限已变化，本次结果未保存，请检查后重新生成。';
     }
     retryButton.onclick=async()=>{

@@ -24,7 +24,8 @@ public class OutlineTaskController {
     private final OutlineTaskService tasks;
     private final boolean enabled;
 
-    public OutlineTaskController(MeetingService meetings, OutlineTaskService tasks, @Value("${meetflow.minutes.background.enabled:false}") boolean enabled) {
+    public OutlineTaskController(MeetingService meetings, OutlineTaskService tasks,
+            @Value("${meetflow.outline.background.enabled:${meetflow.minutes.background.enabled:false}}") boolean enabled) {
         this.meetings = meetings;
         this.tasks = tasks;
         this.enabled = enabled;

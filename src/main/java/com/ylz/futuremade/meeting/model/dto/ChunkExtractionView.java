@@ -31,4 +31,6 @@ public class ChunkExtractionView {
      * 候选信息及来源，可能为空。
      */
     private List<ChunkExtractionItem> items;
+    /** 长分段没有提取出候选时提示核对，不表示模型执行失败。 */
+    private Boolean emptyNeedsReview;
 }

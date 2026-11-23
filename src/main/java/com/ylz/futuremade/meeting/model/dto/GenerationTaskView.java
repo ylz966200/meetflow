@@ -1,6 +1,8 @@
 package com.ylz.futuremade.meeting.model.dto;
 import lombok.Getter;
 import lombok.Setter;
+import java.util.ArrayList;
+import java.util.List;
 /** 后台生成任务的进度，不包含会议正文或批次输入。 */
 @Getter @Setter
 public class GenerationTaskView {
@@ -11,4 +13,5 @@ public class GenerationTaskView {
     /** 失败的有效批次数。 */ private int failedBatches;
     /** 最终保存的纪要版本。 */ private Integer resultVersion;
     /** 安全错误类型。 */ private String errorCode;
+    /** 较长分段未提取到内容时提示核对的序号，从一开始；空结果本身合法。 */ private List<Integer> suspiciousChunks = new ArrayList<>();
 }

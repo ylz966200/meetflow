@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.UUID;
 import java.util.Set;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -29,8 +30,6 @@ public class GenerationTaskScheduler {
     private final AiGenerationBatchMapper batches;
     private final MinutesBatchWorker worker;
     private final MinutesTaskFinalizer finalizer;
-    private final OutlineTaskWorker outlineWorker;
-    private final OutlineTaskFinalizer outlineFinalizer;
     private final KnowledgeIndexWorker knowledgeWorker;
     private final String owner = UUID.randomUUID().toString();
     private final Set<String> active = ConcurrentHashMap.newKeySet();
@@ -38,7 +37,7 @@ public class GenerationTaskScheduler {
     private final int scanSize;
     private final boolean generationEnabled;
 
-    public GenerationTaskScheduler(AiGenerationTaskMapper tasks, AiGenerationBatchMapper batches, MinutesBatchWorker worker, MinutesTaskFinalizer finalizer, OutlineTaskWorker outlineWorker, OutlineTaskFinalizer outlineFinalizer, KnowledgeIndexWorker knowledgeWorker,
+    public GenerationTaskScheduler(AiGenerationTaskMapper tasks, AiGenerationBatchMapper batches, MinutesBatchWorker worker, MinutesTaskFinalizer finalizer, KnowledgeIndexWorker knowledgeWorker,
                                    @Value("${meetflow.minutes.background.max-concurrent-tasks:2}") int maxConcurrent,
                                    @Value("${meetflow.minutes.background.scan-size:20}") int scanSize,
                                    @Value("${meetflow.minutes.background.enabled:false}") boolean generationEnabled) {
@@ -48,8 +47,6 @@ public class GenerationTaskScheduler {
         this.batches = batches;
         this.worker = worker;
         this.finalizer = finalizer;
-        this.outlineWorker = outlineWorker;
-        this.outlineFinalizer = outlineFinalizer;
         this.knowledgeWorker = knowledgeWorker;
         this.pool = Executors.newFixedThreadPool(maxConcurrent);
         this.scanSize = scanSize;
@@ -62,25 +59,22 @@ public class GenerationTaskScheduler {
     @Scheduled(fixedDelayString = "${meetflow.minutes.background.poll-delay-ms:5000}", initialDelayString = "${meetflow.minutes.background.initial-delay-ms:5000}")
     public void poll() {
         if (generationEnabled) {
-            schedule(PromptScenarioCode.MEETING_MINUTES.code(), false);
-            schedule(PromptScenarioCode.MEETING_OUTLINE.code(), true);
+            schedule(PromptScenarioCode.MEETING_MINUTES.code());
         }
-        schedule(KnowledgeTaskType.MINUTES_INDEX.code(), false);
+        schedule(KnowledgeTaskType.MINUTES_INDEX.code());
     }
 
-    private void schedule(String type, boolean outline) {
+    private void schedule(String type) {
         for (String taskId : tasks.runnable(type, GenerationTaskStatus.PENDING.code(), GenerationTaskStatus.RUNNING.code(), scanSize)) {
             if (!active.add(taskId)) continue;
             pool.execute(() -> {
                 try {
-                    var available = batches.runnable(taskId, GenerationBatchStatus.PENDING.code(), GenerationBatchStatus.RUNNING.code(), 1);
+                    List<String> available = batches.runnable(taskId, GenerationBatchStatus.PENDING.code(), GenerationBatchStatus.RUNNING.code(), 1);
                     if (!available.isEmpty()) {
                         if (KnowledgeTaskType.MINUTES_INDEX.code().equals(type)) knowledgeWorker.execute(available.get(0), owner);
-                        else if (outline) outlineWorker.execute(available.get(0), owner);
                         else worker.execute(available.get(0), owner);
                     }
                     if (KnowledgeTaskType.MINUTES_INDEX.code().equals(type)) knowledgeWorker.finish(taskId);
-                    else if (outline) outlineFinalizer.finishIfReady(taskId);
                     else finalizer.finishIfReady(taskId);
                 } catch (Exception ex) {
                     ErrorDiagnostics.error("纪要后台任务调度失败", ex);

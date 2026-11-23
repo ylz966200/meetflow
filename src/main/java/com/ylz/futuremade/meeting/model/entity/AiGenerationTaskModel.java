@@ -36,6 +36,14 @@ public class AiGenerationTaskModel {
     private Integer resultVersion;
     /** 安全失败原因编码。 */
     private String errorCode;
+    /** 当前大纲 Graph 执行实例标识。 */
+    private String graphLeaseOwner;
+    /** 当前大纲 Graph 租约到期时间。 */
+    private LocalDateTime graphLeaseUntil;
+    /** 当前大纲 Graph 执行令牌，用于阻止过期执行者写入。 */
+    private String graphAttemptToken;
+    /** 最近一次大纲 Graph 检查点，仅含节点及阶段引用。 */
+    private String graphCheckpointJson;
     /** 创建时间。 */
     private LocalDateTime createdAt;
     /** 首次开始执行时间。 */

@@ -79,6 +79,8 @@ meetflow:
     # 正文按 Java UTF-16 单元计数；不包含提示词和上文。
     target-chars: 6000
     max-chars: 8000
+    # 正文达到该长度且提取为空时提示核对，不影响任务完成。
+    suspicious-empty-chars: ${MEETFLOW_SUSPICIOUS_EMPTY_CHARS:2000}
     # 从上一分段末尾取完整发言作为上文，超过预算时停止。
     context-utterances: 5
     context-chars: 500

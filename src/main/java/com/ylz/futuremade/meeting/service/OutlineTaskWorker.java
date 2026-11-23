@@ -7,6 +7,8 @@ import com.ylz.futuremade.meeting.enums.GenerationBatchStatus;
 import com.ylz.futuremade.meeting.enums.GenerationTaskStatus;
 import com.ylz.futuremade.meeting.mapper.AiGenerationBatchMapper;
 import com.ylz.futuremade.meeting.mapper.AiGenerationTaskMapper;
+import com.ylz.futuremade.meeting.model.entity.AiGenerationBatchModel;
+import com.ylz.futuremade.meeting.model.entity.AiGenerationTaskModel;
 import com.ylz.futuremade.meeting.model.dto.*;
 import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
 import com.ylz.futuremade.prompt.service.PromptService;
@@ -22,9 +24,11 @@ import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.List;
 
 /**
- * 执行大纲后台任务的一个分段或归并批次。
+ * 执行大纲 Graph 的一个文字稿分段，保存可恢复的提取结果。
  */
 @Service
 public class OutlineTaskWorker {
@@ -41,7 +45,8 @@ public class OutlineTaskWorker {
 
     public OutlineTaskWorker(AiGenerationBatchMapper batches, AiGenerationTaskMapper tasks, GenerationBatchLeaseService leases, OutlineService outlines,
                              TranscriptOutlineGenerator generator, PromptService prompts, AdminMapper users, ObjectMapper json,
-                             @Value("${meetflow.minutes.task-lease-seconds:120}") int leaseSeconds, @Value("${meetflow.ai.default-model:deepSeekChatModel}") String model) {
+                             @Value("${meetflow.outline.task-lease-seconds:${meetflow.minutes.task-lease-seconds:120}}") int leaseSeconds,
+                             @Value("${meetflow.ai.default-model:deepSeekChatModel}") String model) {
         if (leaseSeconds < 3) throw new IllegalArgumentException("批次租约时间至少为三秒");
         this.batches = batches;
         this.tasks = tasks;
@@ -56,24 +61,22 @@ public class OutlineTaskWorker {
     }
 
     /**
-     * 领取并执行可恢复批次；归并阶段只在全部分段完成后开始。
+     * 领取并执行可恢复分段；Graph 负责决定何时归并。
      */
-    public boolean execute(String batchId, String owner) {
-        var part = batches.findById(batchId);
+    public boolean execute(String batchId, String owner) throws Exception {
+        AiGenerationBatchModel part = batches.findById(batchId);
         if (part == null) return false;
-        var task = tasks.findById(part.getTaskId());
+        AiGenerationTaskModel task = tasks.findById(part.getTaskId());
         // 调度查询与执行之间任务可能被删除或状态发生变化，领取前重新确认。
         if (task == null) return false;
         if (!PromptScenarioCode.MEETING_OUTLINE.code().equals(task.getTaskType())) return false;
         if (!Objects.equals(task.getStatus(), GenerationTaskStatus.PENDING.code())
                 && !Objects.equals(task.getStatus(), GenerationTaskStatus.RUNNING.code())) return false;
-        if (OutlineTaskService.GROUP_BATCH.equals(part.getBatchNo()) && batches.findByTask(task.getId()).stream().anyMatch(b -> !OutlineTaskService.GROUP_BATCH.equals(b.getBatchNo()) && b.getStatus() != GenerationBatchStatus.SUCCEEDED.code()))
-            return false;
         String token = leases.claim(batchId, owner, leaseSeconds);
         if (token == null) return false;
-        var lost = new AtomicBoolean(false);
-        var heartbeat = Executors.newSingleThreadScheduledExecutor(r -> {
-            var t = new Thread(r, "outline-batch-lease");
+        AtomicBoolean lost = new AtomicBoolean(false);
+        ScheduledExecutorService heartbeat = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "outline-batch-lease");
             t.setDaemon(true);
             return t;
         });
@@ -86,42 +89,34 @@ public class OutlineTaskWorker {
             }
         }, leaseSeconds / 3, leaseSeconds / 3, TimeUnit.SECONDS);
         try {
-            tasks.transition(task.getId(), GenerationTaskStatus.PENDING.code(), GenerationTaskStatus.RUNNING.code(), null);
             if (!model.equals(task.getModelName())) throw new IllegalStateException("任务固定的模型配置已变化");
-            var user = users.user(task.getActorId());
+            AdminMapper.UserRow user = users.user(task.getActorId());
             if (user == null || !user.enabled())
                 throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "任务发起用户已停用");
             outlines.checkGeneration(task.getMeetingId(), task.getActorId(), task.getTranscriptVersion(), task.getExpectedResultVersion());
-            var all = new ArrayList<ChunkUtterance>();
-            var results = new ArrayList<ChunkExtractionView>();
-            for (var batch : batches.findByTask(task.getId())) {
-                if (OutlineTaskService.GROUP_BATCH.equals(batch.getBatchNo())) continue;
+            List<ChunkUtterance> all = new ArrayList<>();
+            for (AiGenerationBatchModel batch : batches.findByTask(task.getId())) {
                 String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(batch.getInputJson().getBytes(StandardCharsets.UTF_8)));
                 if (!Objects.equals(hash, batch.getInputHash()))
                     throw new IllegalStateException("大纲分段快照校验失败");
-                var chunk = json.readValue(batch.getInputJson(), TranscriptChunkView.class);
+                TranscriptChunkView chunk = json.readValue(batch.getInputJson(), TranscriptChunkView.class);
                 all.addAll(chunk.getUtterances());
-                if (OutlineTaskService.GROUP_BATCH.equals(part.getBatchNo()))
-                    results.add(json.readValue(batch.getOutputJson(), ChunkExtractionView.class));
             }
-            Object result;
-            if (OutlineTaskService.GROUP_BATCH.equals(part.getBatchNo())) {
-                var config = json.readValue(task.getConfigJson(), OutlineTaskConfig.class);
-                var prompt = prompts.version(PromptScenarioCode.TRANSCRIPT_TOPIC_GROUPING.code(), config.getGroupingPromptVersionId());
-                result = generator.buildDraft(results, all, task.getTranscriptVersion(), task.getMeetingId(), task.getActorId(), batchId, prompt);
-            } else {
-                var chunk = json.readValue(part.getInputJson(), TranscriptChunkView.class);
-                var prompt = prompts.version(PromptScenarioCode.TRANSCRIPT_EXTRACTION.code(), task.getPromptVersionId());
-                result = generator.extractChunk(chunk, all, prompt, task.getMeetingId(), task.getTranscriptVersion(), task.getActorId(), user.username(), batchId);
-            }
+            TranscriptChunkView chunk = json.readValue(part.getInputJson(), TranscriptChunkView.class);
+            com.ylz.futuremade.prompt.model.entity.PromptVersion prompt = prompts.version(PromptScenarioCode.TRANSCRIPT_EXTRACTION.code(), task.getPromptVersionId());
+            ChunkExtractionView result = generator.extractChunk(chunk, all, prompt, task.getMeetingId(), task.getTranscriptVersion(), task.getActorId(), user.username(), batchId);
             if (lost.get()) return false;
             return leases.complete(batchId, token, json.writeValueAsString(result), null);
         } catch (Exception ex) {
-            ErrorDiagnostics.error("后台大纲批次执行失败", ex);
             boolean changed = ex instanceof ResponseStatusException status && (status.getStatusCode().value() == 403 || status.getStatusCode().value() == 404 || status.getStatusCode().value() == 409);
             String code = changed ? "SOURCE_CHANGED" : "BATCH_FAILED";
-            if (!lost.get()) leases.fail(batchId, token, code, null);
-            return false;
+            // 保留失败批次供用户重试，写入失败不能覆盖原始异常。
+            try {
+                if (!lost.get()) leases.fail(batchId, token, code, null);
+            } catch (RuntimeException persistenceFailure) {
+                ex.addSuppressed(persistenceFailure);
+            }
+            throw ex;
         } finally {
             heartbeat.shutdownNow();
         }

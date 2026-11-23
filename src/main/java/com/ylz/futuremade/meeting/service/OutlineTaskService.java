@@ -3,14 +3,19 @@ package com.ylz.futuremade.meeting.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.meeting.enums.GenerationBatchStatus;
 import com.ylz.futuremade.meeting.enums.GenerationTaskStatus;
+import com.ylz.futuremade.meeting.enums.OutlineFailureCode;
 import com.ylz.futuremade.meeting.mapper.AiGenerationBatchMapper;
 import com.ylz.futuremade.meeting.mapper.AiGenerationTaskMapper;
+import com.ylz.futuremade.meeting.mapper.MeetingMapper;
 import com.ylz.futuremade.meeting.model.dto.GenerationTaskView;
+import com.ylz.futuremade.meeting.model.dto.ChunkExtractionView;
 import com.ylz.futuremade.meeting.model.dto.OutlineTaskConfig;
+import com.ylz.futuremade.meeting.model.dto.TranscriptChunkView;
 import com.ylz.futuremade.meeting.model.entity.AiGenerationBatchModel;
 import com.ylz.futuremade.meeting.model.entity.AiGenerationTaskModel;
 import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
 import com.ylz.futuremade.prompt.service.PromptService;
+import com.ylz.futuremade.prompt.model.entity.PromptVersion;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
@@ -21,6 +26,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -29,10 +35,6 @@ import java.util.UUID;
  */
 @Service
 public class OutlineTaskService {
-    /**
-     * 归并批次排在全部分段之后。
-     */
-    public static final String GROUP_BATCH = "99999999";
     private final AiGenerationTaskMapper tasks;
     private final AiGenerationBatchMapper batches;
     private final MeetingService meetings;
@@ -65,17 +67,17 @@ public class OutlineTaskService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求标识必须是标准 UUID");
         }
         meetings.requireOutlineEditor(meetingId, actor, false);
-        var existing = tasks.findByRequestKey(key);
+        AiGenerationTaskModel existing = tasks.findByRequestKey(key);
         if (existing != null)
             return view(checkExisting(existing, meetingId, actor, transcriptVersion, expectedVersion));
         outlines.checkGeneration(meetingId, actor, transcriptVersion, expectedVersion);
-        var transcript = meetings.getTranscript(meetingId, actor, transcriptVersion);
-        var chunks = generator.prepareChunks(transcript.content(), meetingId, transcriptVersion);
-        var extractPrompt = prompts.active(PromptScenarioCode.TRANSCRIPT_EXTRACTION.code());
-        var groupPrompt = prompts.active(PromptScenarioCode.TRANSCRIPT_TOPIC_GROUPING.code());
-        var config = new OutlineTaskConfig();
+        MeetingMapper.Transcript transcript = meetings.getTranscript(meetingId, actor, transcriptVersion);
+        List<TranscriptChunkView> chunks = generator.prepareChunks(transcript.content(), meetingId, transcriptVersion);
+        PromptVersion extractPrompt = prompts.active(PromptScenarioCode.TRANSCRIPT_EXTRACTION.code());
+        PromptVersion groupPrompt = prompts.active(PromptScenarioCode.TRANSCRIPT_TOPIC_GROUPING.code());
+        OutlineTaskConfig config = new OutlineTaskConfig();
         config.setGroupingPromptVersionId(groupPrompt.getId());
-        var task = new AiGenerationTaskModel();
+        AiGenerationTaskModel task = new AiGenerationTaskModel();
         task.setId(UUID.randomUUID().toString());
         task.setRequestKey(key);
         task.setMeetingId(meetingId);
@@ -91,18 +93,17 @@ public class OutlineTaskService {
         try {
             tasks.insert(task);
         } catch (DuplicateKeyException ex) {
-            var concurrent = tasks.lockByRequestKey(key);
+            AiGenerationTaskModel concurrent = tasks.lockByRequestKey(key);
             if (concurrent == null) throw ex;
             return view(checkExisting(concurrent, meetingId, actor, transcriptVersion, expectedVersion));
         }
         for (int i = 0; i < chunks.size(); i++)
             insertBatch(task.getId(), String.format(java.util.Locale.ROOT, "%08d", i + 1), json.writeValueAsString(chunks.get(i)));
-        insertBatch(task.getId(), GROUP_BATCH, "{}");
         return view(task);
     }
 
     private void insertBatch(String taskId, String order, String input) throws Exception {
-        var batch = new AiGenerationBatchModel();
+        AiGenerationBatchModel batch = new AiGenerationBatchModel();
         batch.setId(UUID.randomUUID().toString());
         batch.setTaskId(taskId);
         batch.setBatchNo(order);
@@ -140,13 +141,18 @@ public class OutlineTaskService {
     @Transactional
     public GenerationTaskView retry(String meetingId, String id, long actor) {
         meetings.requireOutlineEditor(meetingId, actor, false);
-        var task = require(tasks.lockById(id), meetingId);
+        AiGenerationTaskModel task = require(tasks.lockById(id), meetingId);
         if (!Objects.equals(task.getActorId(), actor))
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "仅任务发起人可以重试");
         if (task.getStatus() != GenerationTaskStatus.PARTIAL_FAILED.code())
             throw new ResponseStatusException(HttpStatus.CONFLICT, "当前任务不能重试");
-        if (batches.resetFailed(id, GenerationBatchStatus.FAILED.code(), GenerationBatchStatus.PENDING.code()) == 0)
+        boolean legacy = batches.findByTask(id).stream()
+                .anyMatch(batch -> AiGenerationTaskMapper.LEGACY_OUTLINE_GROUP_BATCH.equals(batch.getBatchNo()));
+        if (legacy) throw new ResponseStatusException(HttpStatus.CONFLICT, "旧版任务请重新生成大纲");
+        int resetCount = batches.resetFailed(id, GenerationBatchStatus.FAILED.code(), GenerationBatchStatus.PENDING.code());
+        if (resetCount == 0 && !OutlineFailureCode.GRAPH_FAILED.code().equals(task.getErrorCode()))
             throw new ResponseStatusException(HttpStatus.CONFLICT, "没有可重试的批次");
+        if (resetCount > 0) tasks.resetOutlineCheckpoint(id);
         if (tasks.transition(id, GenerationTaskStatus.PARTIAL_FAILED.code(), GenerationTaskStatus.RUNNING.code(), null) != 1)
             throw new IllegalStateException("任务状态更新失败");
         task.setStatus(GenerationTaskStatus.RUNNING.code());
@@ -161,18 +167,32 @@ public class OutlineTaskService {
     }
 
     private GenerationTaskView view(AiGenerationTaskModel task) {
-        var view = new GenerationTaskView();
+        GenerationTaskView view = new GenerationTaskView();
         view.setTaskId(task.getId());
         view.setStatus(task.getStatus());
         view.setResultVersion(task.getResultVersion());
         view.setErrorCode(task.getErrorCode());
-        for (var batch : batches.findByTask(task.getId())) {
+        for (AiGenerationBatchModel batch : batches.findByTask(task.getId())) {
             if (batch.getStatus() == GenerationBatchStatus.SPLIT.code()) continue;
             view.setTotalBatches(view.getTotalBatches() + 1);
             if (batch.getStatus() == GenerationBatchStatus.SUCCEEDED.code())
                 view.setSucceededBatches(view.getSucceededBatches() + 1);
             if (batch.getStatus() == GenerationBatchStatus.FAILED.code())
                 view.setFailedBatches(view.getFailedBatches() + 1);
+            if (batch.getStatus() == GenerationBatchStatus.FAILED.code()
+                    && OutlineFailureCode.SUSPICIOUS_EMPTY.code().equals(batch.getErrorCode()))
+                view.getSuspiciousChunks().add(Integer.parseInt(batch.getBatchNo()));
+            // 旧归并批次不是分段提取结果，保留其状态统计但不读取候选字段。
+            if (AiGenerationTaskMapper.LEGACY_OUTLINE_GROUP_BATCH.equals(batch.getBatchNo())) continue;
+            if (batch.getStatus() == GenerationBatchStatus.SUCCEEDED.code()) {
+                try {
+                    ChunkExtractionView extraction = json.readValue(batch.getOutputJson(), ChunkExtractionView.class);
+                    if (Boolean.TRUE.equals(extraction.getEmptyNeedsReview()))
+                        view.getSuspiciousChunks().add(extraction.getChunkIndex());
+                } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
+                    throw new IllegalStateException("读取分段结果失败", exception);
+                }
+            }
         }
         return view;
     }
