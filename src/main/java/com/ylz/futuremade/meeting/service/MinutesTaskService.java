@@ -2,6 +2,7 @@ package com.ylz.futuremade.meeting.service;
 
 import com.ylz.futuremade.meeting.enums.GenerationBatchStatus;
 import com.ylz.futuremade.meeting.enums.GenerationTaskStatus;
+import com.ylz.futuremade.meeting.enums.MinutesTaskFailureCode;
 import com.ylz.futuremade.meeting.mapper.AiGenerationBatchMapper;
 import com.ylz.futuremade.meeting.mapper.AiGenerationTaskMapper;
 import com.ylz.futuremade.meeting.model.dto.GenerationTaskView;
@@ -30,15 +31,18 @@ public class MinutesTaskService {
         meetings.requireOutlineEditor(meetingId,actor,false);
         return view(requireTask(tasks.findLatest(meetingId,PromptScenarioCode.MEETING_MINUTES.code()),meetingId));
     }
-    /** 只重置失败批次，已成功的结果予以保留。 */
+    /** 重试失败批次或 Graph 汇总，保留所有已成功批次的结果。 */
     @Transactional
     public GenerationTaskView retry(String meetingId,String taskId,long actor) {
         meetings.requireOutlineEditor(meetingId,actor,false);
-        var task=requireTask(tasks.lockById(taskId),meetingId);
+        AiGenerationTaskModel task=requireTask(tasks.lockById(taskId),meetingId);
         if(!Objects.equals(task.getActorId(),actor)) throw new ResponseStatusException(HttpStatus.FORBIDDEN,"仅任务发起人可以重试");
         if(task.getStatus()!=GenerationTaskStatus.PARTIAL_FAILED.code()) throw new ResponseStatusException(HttpStatus.CONFLICT,"当前任务状态不支持重试");
-        if(batches.resetFailed(taskId,GenerationBatchStatus.FAILED.code(),GenerationBatchStatus.PENDING.code())==0)
+        int resetCount = batches.resetFailed(taskId, GenerationBatchStatus.FAILED.code(), GenerationBatchStatus.PENDING.code());
+        if (resetCount == 0 && !MinutesTaskFailureCode.GRAPH_FAILED.code().equals(task.getErrorCode()))
             throw new ResponseStatusException(HttpStatus.CONFLICT,"没有可重试的失败批次");
+        // 从批次表重新路由，兼顾重新待执行的批次和可能无法读取的旧检查点。
+        tasks.resetOutlineCheckpoint(taskId);
         if(tasks.transition(taskId,GenerationTaskStatus.PARTIAL_FAILED.code(),GenerationTaskStatus.RUNNING.code(),null)!=1)
             throw new IllegalStateException("任务状态更新失败");
         task.setStatus(GenerationTaskStatus.RUNNING.code());task.setErrorCode(null);return view(task);

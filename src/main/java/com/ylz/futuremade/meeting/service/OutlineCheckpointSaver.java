@@ -16,7 +16,7 @@ import java.util.Optional;
 import org.springframework.stereotype.Component;
 
 /**
- * 使用任务行保存最近一次 Graph 检查点，并用任务租约拦截过期执行者。
+ * 使用任务行保存大纲和纪要 Graph 的最近检查点，并用任务租约拦截过期执行者。
  */
 @Component
 public class OutlineCheckpointSaver implements BaseCheckpointSaver {
@@ -48,7 +48,7 @@ public class OutlineCheckpointSaver implements BaseCheckpointSaver {
                 checkpoint.getNextNodeId(), (Integer) checkpoint.getState().get(ROUND));
         String token = (String) config.metadata(LEASE_TOKEN).orElseThrow();
         if (tasks.saveOutlineCheckpoint(taskId(config), token, json.writeValueAsString(snapshot)) != 1) {
-            throw new IllegalStateException("大纲 Graph 检查点写入时执行权已失效");
+            throw new IllegalStateException("生成 Graph 检查点写入时执行权已失效");
         }
         return config.withCheckPointId(checkpoint.getId());
     }
@@ -69,7 +69,7 @@ public class OutlineCheckpointSaver implements BaseCheckpointSaver {
             return Optional.of(Checkpoint.builder().id(snapshot.id()).nodeId(snapshot.node())
                     .nextNodeId(snapshot.nextNode()).state(state).build());
         } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("大纲 Graph 检查点无法读取", exception);
+            throw new IllegalStateException("生成 Graph 检查点无法读取", exception);
         }
     }
 

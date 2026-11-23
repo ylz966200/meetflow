@@ -29,6 +29,7 @@ import com.ylz.futuremade.meeting.model.entity.AiGenerationTaskModel;
 import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
 import com.ylz.futuremade.prompt.model.entity.PromptVersion;
 import com.ylz.futuremade.prompt.service.PromptService;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Optional;
@@ -39,20 +40,26 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+
 import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
+
 import static com.alibaba.cloud.ai.graph.action.AsyncEdgeActionWithConfig.edge_async;
 import static com.alibaba.cloud.ai.graph.action.AsyncNodeActionWithConfig.node_async;
 import static com.ylz.futuremade.meeting.service.OutlineCheckpointSaver.LEASE_TOKEN;
 import static com.ylz.futuremade.meeting.service.OutlineCheckpointSaver.ROUND;
 
-/** 大纲生成主流程：执行分段、检查进度、归并并保存。 */
+/**
+ * 大纲生成主流程：执行分段、检查进度、归并并保存。
+ */
 @Service
 public class OutlineGenerationWorkflow {
-    /** Graph 最多执行的节点数，防止流程配置错误导致无限循环。 */
+    /**
+     * Graph 最多执行的节点数，防止流程配置错误导致无限循环。
+     */
     private static final int MAX_GRAPH_STEPS = 10000;
     private static final String OWNER = "outlineLeaseOwner";
     private static final String EXTRACT = "extract";
@@ -78,9 +85,9 @@ public class OutlineGenerationWorkflow {
     private final ScheduledExecutorService heartbeat = Executors.newScheduledThreadPool(1);
 
     public OutlineGenerationWorkflow(AiGenerationTaskMapper tasks, AiGenerationBatchMapper batches, OutlineTaskWorker worker,
-            OutlineGraphFinalizer finalizer, TranscriptOutlineGenerator generator, PromptService prompts, AdminMapper users, OutlineService outlines, ObjectMapper json,
-            OutlineCheckpointSaver checkpoints, TopicAnalysisService topics, OutlineMergeStore mergeStore,
-            @Value("${meetflow.outline.task-lease-seconds:${meetflow.minutes.task-lease-seconds:120}}") int leaseSeconds) throws Exception {
+                                     OutlineGraphFinalizer finalizer, TranscriptOutlineGenerator generator, PromptService prompts, AdminMapper users, OutlineService outlines, ObjectMapper json,
+                                     OutlineCheckpointSaver checkpoints, TopicAnalysisService topics, OutlineMergeStore mergeStore,
+                                     @Value("${meetflow.outline.task-lease-seconds:${meetflow.minutes.task-lease-seconds:120}}") int leaseSeconds) throws Exception {
         if (leaseSeconds < 3) throw new IllegalArgumentException("Graph 租约时间至少为三秒");
         this.tasks = tasks;
         this.batches = batches;
@@ -124,16 +131,22 @@ public class OutlineGenerationWorkflow {
                         .saverConfig(SaverConfig.builder().register(checkpoints).build()).build());
     }
 
-    /** 先领取新租约，再从任务最近检查点恢复；租约令牌仅通过本次执行配置传递。 */
+    /**
+     * 先领取新租约，再从任务最近检查点恢复；租约令牌仅通过本次执行配置传递。
+     */
     public void run(String taskId, String owner) throws Exception {
         String token = UUID.randomUUID().toString();
-        if (tasks.claimGraph(taskId, PromptScenarioCode.MEETING_OUTLINE.code(), GenerationTaskStatus.PENDING.code(), GenerationTaskStatus.RUNNING.code(), owner, token, leaseSeconds) != 1) return;
+        if (tasks.claimGraph(taskId, PromptScenarioCode.MEETING_OUTLINE.code(), GenerationTaskStatus.PENDING.code(), GenerationTaskStatus.RUNNING.code(), owner, token, leaseSeconds) != 1)
+            return;
         ScheduledFuture<?> renewal = null;
         Exception executionFailure = null;
         try {
             renewal = heartbeat.scheduleWithFixedDelay(() -> {
-                try { tasks.renewGraph(taskId, token, leaseSeconds); }
-                catch (RuntimeException exception) { ErrorDiagnostics.error("大纲 Graph 租约续期失败", exception); }
+                try {
+                    tasks.renewGraph(taskId, token, leaseSeconds);
+                } catch (RuntimeException exception) {
+                    ErrorDiagnostics.error("大纲 Graph 租约续期失败", exception);
+                }
             }, leaseSeconds / 3, leaseSeconds / 3, TimeUnit.SECONDS);
             RunnableConfig config = RunnableConfig.builder().threadId(taskId)
                     .addMetadata(LEASE_TOKEN, token).addMetadata(OWNER, owner).build();
@@ -158,8 +171,8 @@ public class OutlineGenerationWorkflow {
                 } else {
                     boolean changed = sourceChanged(exception);
                     tasks.failGraph(taskId, token, GenerationTaskStatus.RUNNING.code(),
-                        changed ? GenerationTaskStatus.SOURCE_CHANGED.code() : GenerationTaskStatus.PARTIAL_FAILED.code(),
-                        changed ? "SOURCE_CHANGED" : OutlineFailureCode.GRAPH_FAILED.code());
+                            changed ? GenerationTaskStatus.SOURCE_CHANGED.code() : GenerationTaskStatus.PARTIAL_FAILED.code(),
+                            changed ? "SOURCE_CHANGED" : OutlineFailureCode.GRAPH_FAILED.code());
                 }
             } catch (RuntimeException persistenceFailure) {
                 exception.addSuppressed(persistenceFailure);
@@ -177,9 +190,13 @@ public class OutlineGenerationWorkflow {
         }
     }
 
-    /** 关闭共享续租线程池；未完成任务会在租约失效后恢复。 */
+    /**
+     * 关闭共享续租线程池；未完成任务会在租约失效后恢复。
+     */
     @PreDestroy
-    public void shutdown() { heartbeat.shutdown(); }
+    public void shutdown() {
+        heartbeat.shutdown();
+    }
 
     private void requireLease(String taskId, String token) {
         if (tasks.ownsGraph(taskId, token) != 1) throw new IllegalStateException("大纲 Graph 执行权已失效");
@@ -203,7 +220,8 @@ public class OutlineGenerationWorkflow {
     private String route(String taskId) {
         List<AiGenerationBatchModel> parts = batches.findByTask(taskId);
         if (parts.stream().anyMatch(part -> part.getStatus() == GenerationBatchStatus.FAILED.code())) return FAIL;
-        if (!batches.runnable(taskId, GenerationBatchStatus.PENDING.code(), GenerationBatchStatus.RUNNING.code(), 1).isEmpty()) return EXTRACT;
+        if (!batches.runnable(taskId, GenerationBatchStatus.PENDING.code(), GenerationBatchStatus.RUNNING.code(), 1).isEmpty())
+            return EXTRACT;
         if (parts.stream().anyMatch(part -> part.getStatus() != GenerationBatchStatus.SUCCEEDED.code())) return WAIT;
         return MERGE;
     }
@@ -211,7 +229,8 @@ public class OutlineGenerationWorkflow {
     private OutlineMergeInput prepareMerge(AiGenerationTaskModel task) throws Exception {
         String taskId = task.getId();
         AdminMapper.UserRow user = users.user(task.getActorId());
-        if (user == null || !user.enabled()) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "任务发起用户已停用");
+        if (user == null || !user.enabled())
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "任务发起用户已停用");
         outlines.checkGeneration(task.getMeetingId(), task.getActorId(), task.getTranscriptVersion(), task.getExpectedResultVersion());
         List<ChunkUtterance> all = new ArrayList<>();
         List<ChunkExtractionView> results = new ArrayList<>();
@@ -242,7 +261,7 @@ public class OutlineGenerationWorkflow {
             OutlineGroupingProgress progress = round == 0
                     ? topics.groupInitial(candidates, prompt, task.getMeetingId(), task.getActorId(), taskId, cache)
                     : topics.groupAcross(candidates, stage(taskId, round - 1), round, prompt,
-                            task.getMeetingId(), task.getActorId(), taskId, cache);
+                    task.getMeetingId(), task.getActorId(), taskId, cache);
             mergeStore.save(taskId, token, hash, progress, progress.lastCallId());
         }
         return Map.of(ROUND, round);
@@ -274,6 +293,11 @@ public class OutlineGenerationWorkflow {
         return OutlineMergeStore.hash("outline-stage-v1:" + round);
     }
 
-    private static String taskId(RunnableConfig config) { return config.threadId().orElseThrow(); }
-    private static String token(RunnableConfig config) { return (String) config.metadata(LEASE_TOKEN).orElseThrow(); }
+    private static String taskId(RunnableConfig config) {
+        return config.threadId().orElseThrow();
+    }
+
+    private static String token(RunnableConfig config) {
+        return (String) config.metadata(LEASE_TOKEN).orElseThrow();
+    }
 }

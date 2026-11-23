@@ -1813,7 +1813,7 @@ async function setupMinutes(id, role, transcriptDirty) {
         currentTask = task;
         const states = {1:'等待执行',2:'生成中',3:'部分失败',4:'已完成',5:'来源已变化',6:'已取消'};
         taskInfo.textContent = '后台任务：' + (states[task.status] || '未知状态') + ' · 已完成 ' + task.succeededBatches + ' / ' + task.totalBatches + ' 批' + (task.failedBatches ? ' · 失败 ' + task.failedBatches + ' 批' : '');
-        retryButton.classList.toggle('hidden', task.status !== 3 || task.failedBatches === 0);
+        retryButton.classList.toggle('hidden', task.status !== 3 || (task.failedBatches === 0 && task.errorCode !== 'GRAPH_FAILED'));
         if(task.errorCode === 'OUTPUT_TOO_LONG') message.textContent='生成内容超过纪要长度上限，请精简大纲后重新生成。';
         clearTimeout(taskTimer);
         if (task.status === 1 || task.status === 2) {

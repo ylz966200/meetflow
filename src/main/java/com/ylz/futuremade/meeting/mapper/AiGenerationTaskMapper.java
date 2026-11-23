@@ -9,8 +9,8 @@ public interface AiGenerationTaskMapper {
     /** 旧大纲任务以此固定编号保存整份归并结果，不能交给新分段流程。 */
     String LEGACY_OUTLINE_GROUP_BATCH = "99999999";
     /** 新大纲调度保持旧流程的批次数据原样。 */
-    String NEW_OUTLINE_ONLY = " AND NOT EXISTS (SELECT 1 FROM mf_ai_generation_batch legacy"
-            + " WHERE legacy.task_id=mf_ai_generation_task.id AND legacy.batch_no='" + LEGACY_OUTLINE_GROUP_BATCH + "')";
+    String NEW_OUTLINE_ONLY = " AND (#{type}<>'MEETING_OUTLINE' OR NOT EXISTS (SELECT 1 FROM mf_ai_generation_batch legacy"
+            + " WHERE legacy.task_id=mf_ai_generation_task.id AND legacy.batch_no='" + LEGACY_OUTLINE_GROUP_BATCH + "'))";
     /** 新建任务，幂等键由数据库唯一索引保证。 */
     @Insert("""
         INSERT INTO mf_ai_generation_task
@@ -46,7 +46,7 @@ public interface AiGenerationTaskMapper {
     @Update("UPDATE mf_ai_generation_task SET status = #{succeeded}, result_version = #{version}, finished_at = CURRENT_TIMESTAMP(6) WHERE id = #{id} AND status = #{running}")
     int complete(@Param("id") String id, @Param("running") int running, @Param("succeeded") int succeeded, @Param("version") int version);
 
-    /** 领取大纲 Graph 的执行权，避免多个实例同时归并同一任务。 */
+    /** 领取指定生成任务的 Graph 执行权；旧版大纲任务仍排除在外。 */
     @Update("UPDATE mf_ai_generation_task SET status=#{running}, started_at=COALESCE(started_at,CURRENT_TIMESTAMP(6)), graph_lease_owner=#{owner}, graph_lease_until=TIMESTAMPADD(SECOND, #{seconds}, CURRENT_TIMESTAMP(6)), graph_attempt_token=#{token} WHERE id=#{id} AND task_type=#{type} AND status IN (#{pending},#{running}) AND (graph_lease_until IS NULL OR graph_lease_until<CURRENT_TIMESTAMP(6))" + NEW_OUTLINE_ONLY)
     int claimGraph(@Param("id") String id, @Param("type") String type, @Param("pending") int pending, @Param("running") int running, @Param("owner") String owner, @Param("token") String token, @Param("seconds") int seconds);
 
@@ -66,7 +66,7 @@ public interface AiGenerationTaskMapper {
     @Update("UPDATE mf_ai_generation_task SET status=#{next}, error_code=#{error} WHERE id=#{id} AND status=#{running} AND graph_attempt_token=#{token} AND graph_lease_until>=CURRENT_TIMESTAMP(6)")
     int failGraph(@Param("id") String id, @Param("token") String token, @Param("running") int running, @Param("next") int next, @Param("error") String error);
 
-    /** 只发现尚未被其他实例领取或租约已过期的大纲任务。 */
+    /** 发现尚未被领取或租约已过期的指定类型生成任务。 */
     @Select("SELECT id FROM mf_ai_generation_task WHERE task_type=#{type} AND status IN (#{pending},#{running}) AND (graph_lease_until IS NULL OR graph_lease_until<CURRENT_TIMESTAMP(6))"
             + NEW_OUTLINE_ONLY + " ORDER BY created_at LIMIT #{limit}")
     java.util.List<String> runnableGraph(@Param("type") String type, @Param("pending") int pending, @Param("running") int running, @Param("limit") int limit);
@@ -79,7 +79,7 @@ public interface AiGenerationTaskMapper {
     @Select("SELECT graph_checkpoint_json FROM mf_ai_generation_task WHERE id=#{id}")
     String outlineCheckpoint(@Param("id") String id);
 
-    /** 用户重试提取时，撤销旧执行权并从分段节点重新读取业务进度。 */
+    /** 用户重试失败批次时，撤销旧执行权并由 Graph 重新读取批次进度。 */
     @Update("UPDATE mf_ai_generation_task SET graph_checkpoint_json=NULL, graph_lease_owner=NULL, graph_lease_until=NULL, graph_attempt_token=NULL WHERE id=#{id}")
     int resetOutlineCheckpoint(@Param("id") String id);
 

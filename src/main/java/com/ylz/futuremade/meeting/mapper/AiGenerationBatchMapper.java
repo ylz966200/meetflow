@@ -18,6 +18,10 @@ public interface AiGenerationBatchMapper {
     @Select("SELECT id, task_id AS taskId, batch_no AS batchNo, parent_batch_id AS parentBatchId, status, input_json AS inputJson, input_hash AS inputHash, output_json AS outputJson, ai_call_id AS aiCallId, attempt_count AS attemptCount, error_code AS errorCode, lease_owner AS leaseOwner, lease_until AS leaseUntil, attempt_token AS attemptToken, created_at AS createdAt, updated_at AS updatedAt FROM mf_ai_generation_batch WHERE task_id = #{taskId} ORDER BY batch_no")
     List<AiGenerationBatchModel> findByTask(@Param("taskId") String taskId);
 
+    /** 路由只需要批次状态，无需反复加载输入及模型输出。 */
+    @Select("SELECT DISTINCT status FROM mf_ai_generation_batch WHERE task_id=#{taskId}")
+    List<Integer> statusesByTask(@Param("taskId") String taskId);
+
     @Select("SELECT id, task_id AS taskId, batch_no AS batchNo, parent_batch_id AS parentBatchId, status, input_json AS inputJson, input_hash AS inputHash, output_json AS outputJson, ai_call_id AS aiCallId, attempt_count AS attemptCount, error_code AS errorCode, lease_owner AS leaseOwner, lease_until AS leaseUntil, attempt_token AS attemptToken, created_at AS createdAt, updated_at AS updatedAt FROM mf_ai_generation_batch WHERE id = #{id}")
     AiGenerationBatchModel findById(@Param("id") String id);
 

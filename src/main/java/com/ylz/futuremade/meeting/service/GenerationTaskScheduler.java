@@ -28,8 +28,7 @@ import jakarta.annotation.PreDestroy;
 public class GenerationTaskScheduler {
     private final AiGenerationTaskMapper tasks;
     private final AiGenerationBatchMapper batches;
-    private final MinutesBatchWorker worker;
-    private final MinutesTaskFinalizer finalizer;
+    private final MinutesGenerationWorkflow minutesWorkflow;
     private final KnowledgeIndexWorker knowledgeWorker;
     private final String owner = UUID.randomUUID().toString();
     private final Set<String> active = ConcurrentHashMap.newKeySet();
@@ -37,7 +36,8 @@ public class GenerationTaskScheduler {
     private final int scanSize;
     private final boolean generationEnabled;
 
-    public GenerationTaskScheduler(AiGenerationTaskMapper tasks, AiGenerationBatchMapper batches, MinutesBatchWorker worker, MinutesTaskFinalizer finalizer, KnowledgeIndexWorker knowledgeWorker,
+    public GenerationTaskScheduler(AiGenerationTaskMapper tasks, AiGenerationBatchMapper batches,
+                                   MinutesGenerationWorkflow minutesWorkflow, KnowledgeIndexWorker knowledgeWorker,
                                    @Value("${meetflow.minutes.background.max-concurrent-tasks:2}") int maxConcurrent,
                                    @Value("${meetflow.minutes.background.scan-size:20}") int scanSize,
                                    @Value("${meetflow.minutes.background.enabled:false}") boolean generationEnabled) {
@@ -45,8 +45,7 @@ public class GenerationTaskScheduler {
             throw new IllegalArgumentException("后台任务并发或扫描数量配置无效");
         this.tasks = tasks;
         this.batches = batches;
-        this.worker = worker;
-        this.finalizer = finalizer;
+        this.minutesWorkflow = minutesWorkflow;
         this.knowledgeWorker = knowledgeWorker;
         this.pool = Executors.newFixedThreadPool(maxConcurrent);
         this.scanSize = scanSize;
@@ -54,7 +53,7 @@ public class GenerationTaskScheduler {
     }
 
     /**
-     * 每次每个任务领取一批，执行后尝试汇总；可在下次扫描继续。
+     * 发现可执行的纪要和知识索引任务；纪要由 Graph 推进，索引按批次推进。
      */
     @Scheduled(fixedDelayString = "${meetflow.minutes.background.poll-delay-ms:5000}", initialDelayString = "${meetflow.minutes.background.initial-delay-ms:5000}")
     public void poll() {
@@ -65,19 +64,24 @@ public class GenerationTaskScheduler {
     }
 
     private void schedule(String type) {
-        for (String taskId : tasks.runnable(type, GenerationTaskStatus.PENDING.code(), GenerationTaskStatus.RUNNING.code(), scanSize)) {
+        boolean minutesTask = PromptScenarioCode.MEETING_MINUTES.code().equals(type);
+        List<String> runnable = minutesTask
+                ? tasks.runnableGraph(type, GenerationTaskStatus.PENDING.code(), GenerationTaskStatus.RUNNING.code(), scanSize)
+                : tasks.runnable(type, GenerationTaskStatus.PENDING.code(), GenerationTaskStatus.RUNNING.code(), scanSize);
+        for (String taskId : runnable) {
             if (!active.add(taskId)) continue;
             pool.execute(() -> {
                 try {
-                    List<String> available = batches.runnable(taskId, GenerationBatchStatus.PENDING.code(), GenerationBatchStatus.RUNNING.code(), 1);
-                    if (!available.isEmpty()) {
-                        if (KnowledgeTaskType.MINUTES_INDEX.code().equals(type)) knowledgeWorker.execute(available.get(0), owner);
-                        else worker.execute(available.get(0), owner);
+                    if (minutesTask) {
+                        minutesWorkflow.run(taskId, owner);
+                    } else {
+                        List<String> available = batches.runnable(taskId, GenerationBatchStatus.PENDING.code(),
+                                GenerationBatchStatus.RUNNING.code(), 1);
+                        if (!available.isEmpty()) knowledgeWorker.execute(available.get(0), owner);
+                        knowledgeWorker.finish(taskId);
                     }
-                    if (KnowledgeTaskType.MINUTES_INDEX.code().equals(type)) knowledgeWorker.finish(taskId);
-                    else finalizer.finishIfReady(taskId);
                 } catch (Exception ex) {
-                    ErrorDiagnostics.error("纪要后台任务调度失败", ex);
+                    ErrorDiagnostics.error(minutesTask ? "纪要 Graph 执行失败" : "知识索引任务执行失败", ex);
                 } finally {
                     active.remove(taskId);
                 }
