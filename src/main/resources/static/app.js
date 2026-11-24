@@ -2256,6 +2256,7 @@ async function setupOutline(id, role, transcriptVersion, transcriptDirty) {
             const ids = [...row.sourceIds];
             const sourcePageSize = 200; // 与来源接口单次候选编号上限一致。
             const candidates = [];
+            const reviewMessages = new Set();
             const segmentsByIndex = new Map();
             for (let start = 0; start < ids.length; start += sourcePageSize) {
                 const response = await api(`${baseUrl}/sources`, {
@@ -2266,9 +2267,15 @@ async function setupOutline(id, role, transcriptVersion, transcriptDirty) {
                 if (!response.ok) throw new Error('来源读取失败，请重新打开后重试。');
                 const data = await response.json();
                 candidates.push(...data.items);
+                for (const issue of data.reviewIssues || []) reviewMessages.add(issue.reason);
                 for (const segment of data.segments) segmentsByIndex.set(segment.segmentIndex, segment);
             }
             body.replaceChildren();
+            if (reviewMessages.size) {
+                const notice = document.createElement('p');
+                notice.textContent = '生成时的归并审核意见（编辑后请重新核对）：' + [...reviewMessages].join('；');
+                body.append(notice);
+            }
             for (const candidate of candidates) {
                 const section = document.createElement('div'), content = document.createElement('p');
                 content.textContent = candidate.content + (candidate.needsReview ? '（待确认）' : ''); section.append(content);

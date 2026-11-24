@@ -20,6 +20,7 @@ import com.ylz.futuremade.meeting.model.dto.ChunkUtterance;
 import com.ylz.futuremade.meeting.model.dto.OutlineTaskConfig;
 import com.ylz.futuremade.meeting.model.dto.OutlineMergeInput;
 import com.ylz.futuremade.meeting.model.dto.OutlineGroupingProgress;
+import com.ylz.futuremade.meeting.model.dto.OutlineReviewResult;
 import com.ylz.futuremade.meeting.model.dto.TopicCandidate;
 import com.ylz.futuremade.meeting.model.entity.OutlineMergeResultModel;
 import com.ylz.futuremade.meeting.model.dto.TranscriptChunkView;
@@ -45,16 +46,18 @@ import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.server.ResponseStatusException;
 
 import static com.alibaba.cloud.ai.graph.action.AsyncEdgeActionWithConfig.edge_async;
-import static com.alibaba.cloud.ai.graph.action.AsyncNodeActionWithConfig.node_async;
+import static com.ylz.futuremade.common.logging.WorkflowNodeLogging.loggedNode;
 import static com.ylz.futuremade.meeting.service.OutlineCheckpointSaver.LEASE_TOKEN;
 import static com.ylz.futuremade.meeting.service.OutlineCheckpointSaver.ROUND;
 
 /**
  * 大纲生成主流程：执行分段、检查进度、归并并保存。
  */
+@Slf4j
 @Service
 public class OutlineGenerationWorkflow {
     /**
@@ -66,6 +69,8 @@ public class OutlineGenerationWorkflow {
     private static final String MERGE = "mergeBatches";
     private static final String CROSS_MERGE = "crossMerge";
     private static final String SAVE = "save";
+    private static final String REVIEW = "reviewOutline";
+    private static final String REVISE = "reviseOutline";
     private static final String FAIL = "fail";
     private static final String WAIT = "wait";
     private final AiGenerationTaskMapper tasks;
@@ -81,12 +86,13 @@ public class OutlineGenerationWorkflow {
     private final OutlineCheckpointSaver checkpoints;
     private final TopicAnalysisService topics;
     private final OutlineMergeStore mergeStore;
+    private final OutlineReviewAgent reviewer;
     private final int leaseSeconds;
     private final ScheduledExecutorService heartbeat = Executors.newScheduledThreadPool(1);
 
     public OutlineGenerationWorkflow(AiGenerationTaskMapper tasks, AiGenerationBatchMapper batches, OutlineTaskWorker worker,
                                      OutlineGraphFinalizer finalizer, TranscriptOutlineGenerator generator, PromptService prompts, AdminMapper users, OutlineService outlines, ObjectMapper json,
-                                     OutlineCheckpointSaver checkpoints, TopicAnalysisService topics, OutlineMergeStore mergeStore,
+                                     OutlineCheckpointSaver checkpoints, TopicAnalysisService topics, OutlineMergeStore mergeStore, OutlineReviewAgent reviewer,
                                      @Value("${meetflow.outline.task-lease-seconds:${meetflow.minutes.task-lease-seconds:120}}") int leaseSeconds) throws Exception {
         if (leaseSeconds < 3) throw new IllegalArgumentException("Graph 租约时间至少为三秒");
         this.tasks = tasks;
@@ -102,21 +108,28 @@ public class OutlineGenerationWorkflow {
         this.checkpoints = checkpoints;
         this.topics = topics;
         this.mergeStore = mergeStore;
-        Map<String, String> mergeRoutes = Map.of(CROSS_MERGE, CROSS_MERGE, SAVE, SAVE);
+        this.reviewer = reviewer;
+        Map<String, String> mergeRoutes = Map.of(CROSS_MERGE, CROSS_MERGE, REVIEW, REVIEW);
         this.graph = new StateGraph(() -> Map.of(ROUND, new ReplaceStrategy()))
-                .addNode(EXTRACT, node_async((state, config) -> {
+                .addNode(EXTRACT, loggedNode(EXTRACT, (state, config) -> {
                     String taskId = taskId(config);
                     requireLease(taskId, token(config));
                     extract(taskId, (String) config.metadata(OWNER).orElseThrow());
                     return Map.of();
                 }))
-                .addNode(MERGE, node_async((state, config) -> mergeStage(config, 0)))
-                .addNode(CROSS_MERGE, node_async((state, config) -> mergeStage(config, state.<Integer>value(ROUND).orElseThrow() + 1)))
-                .addNode(SAVE, node_async((state, config) -> {
+                .addNode(MERGE, loggedNode(MERGE, (state, config) -> mergeStage(config, 0)))
+                .addNode(CROSS_MERGE, loggedNode(CROSS_MERGE, (state, config) -> mergeStage(config, state.<Integer>value(ROUND).orElseThrow() + 1)))
+                .addNode(REVISE, loggedNode(REVISE, (state, config) ->
+                        reviseStage(config, state.<Integer>value(ROUND).orElseThrow())))
+                .addNode(REVIEW, loggedNode(REVIEW, (state, config) -> {
+                    reviewStage(config, state.<Integer>value(ROUND).orElseThrow());
+                    return Map.of();
+                }))
+                .addNode(SAVE, loggedNode(SAVE, (state, config) -> {
                     saveDraft(config, state.<Integer>value(ROUND).orElseThrow());
                     return Map.of();
                 }))
-                .addNode(FAIL, node_async((state, config) -> {
+                .addNode(FAIL, loggedNode(FAIL, (state, config) -> {
                     finalizer.failIfNeeded(taskId(config), token(config));
                     return Map.of();
                 }))
@@ -125,6 +138,10 @@ public class OutlineGenerationWorkflow {
                         Map.of(EXTRACT, EXTRACT, MERGE, MERGE, FAIL, FAIL, WAIT, StateGraph.END))
                 .addConditionalEdges(MERGE, edge_async(this::mergeRoute), mergeRoutes)
                 .addConditionalEdges(CROSS_MERGE, edge_async(this::mergeRoute), mergeRoutes)
+                .addConditionalEdges(REVIEW, edge_async((state, config) ->
+                        reviewRoute(config, state.<Integer>value(ROUND).orElseThrow())),
+                        Map.of(REVISE, REVISE, SAVE, SAVE))
+                .addEdge(REVISE, REVIEW)
                 .addEdge(SAVE, StateGraph.END)
                 .addEdge(FAIL, StateGraph.END)
                 .compile(CompileConfig.builder().recursionLimit(MAX_GRAPH_STEPS).releaseThread(false)
@@ -138,12 +155,16 @@ public class OutlineGenerationWorkflow {
         String token = UUID.randomUUID().toString();
         if (tasks.claimGraph(taskId, PromptScenarioCode.MEETING_OUTLINE.code(), GenerationTaskStatus.PENDING.code(), GenerationTaskStatus.RUNNING.code(), owner, token, leaseSeconds) != 1)
             return;
+        long started = System.nanoTime();
+        log.info("大纲工作流已领取，taskId={}，owner={}", taskId, owner);
         ScheduledFuture<?> renewal = null;
         Exception executionFailure = null;
         try {
             renewal = heartbeat.scheduleWithFixedDelay(() -> {
                 try {
-                    tasks.renewGraph(taskId, token, leaseSeconds);
+                    if (tasks.renewGraph(taskId, token, leaseSeconds) != 1) {
+                        log.warn("大纲任务续租未生效，taskId={}", taskId);
+                    }
                 } catch (RuntimeException exception) {
                     ErrorDiagnostics.error("大纲 Graph 租约续期失败", exception);
                 }
@@ -151,6 +172,8 @@ public class OutlineGenerationWorkflow {
             RunnableConfig config = RunnableConfig.builder().threadId(taskId)
                     .addMetadata(LEASE_TOKEN, token).addMetadata(OWNER, owner).build();
             Optional<Checkpoint> saved = checkpoints.get(config);
+            log.info("大纲工作流执行位置，taskId={}，resume={}，nextNode={}", taskId,
+                    saved.isPresent(), saved.map(Checkpoint::getNextNodeId).orElse(StateGraph.START));
             if (saved.isPresent()) {
                 if (StateGraph.END.equals(saved.get().getNextNodeId())) {
                     // 等待独立分段租约时结束本次扫描，下次从数据库重新判断分段进度。
@@ -177,8 +200,11 @@ public class OutlineGenerationWorkflow {
             } catch (RuntimeException persistenceFailure) {
                 exception.addSuppressed(persistenceFailure);
             }
+            log.warn("大纲工作流异常退出，taskId={}，exceptionType={}", taskId, exception.getClass().getName());
             throw exception;
         } finally {
+            log.info("大纲工作流本次执行结束，taskId={}，failed={}，durationMs={}", taskId,
+                    executionFailure != null, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
             if (renewal != null) renewal.cancel(false);
             // 清理失败不得覆盖执行失败；正常执行时清理异常仍需向调用方抛出。
             try {
@@ -222,7 +248,10 @@ public class OutlineGenerationWorkflow {
         if (parts.stream().anyMatch(part -> part.getStatus() == GenerationBatchStatus.FAILED.code())) return FAIL;
         if (!batches.runnable(taskId, GenerationBatchStatus.PENDING.code(), GenerationBatchStatus.RUNNING.code(), 1).isEmpty())
             return EXTRACT;
-        if (parts.stream().anyMatch(part -> part.getStatus() != GenerationBatchStatus.SUCCEEDED.code())) return WAIT;
+        if (parts.stream().anyMatch(part -> part.getStatus() != GenerationBatchStatus.SUCCEEDED.code())) {
+            log.info("大纲等待批次租约，本次执行退出，taskId={}", taskId);
+            return WAIT;
+        }
         return MERGE;
     }
 
@@ -269,7 +298,7 @@ public class OutlineGenerationWorkflow {
 
     private String mergeRoute(com.alibaba.cloud.ai.graph.OverAllState state, RunnableConfig config) throws Exception {
         int round = state.<Integer>value(ROUND).orElseThrow();
-        return stage(taskId(config), round).needsCrossMerge() ? CROSS_MERGE : SAVE;
+        return stage(taskId(config), round).needsCrossMerge() ? CROSS_MERGE : REVIEW;
     }
 
     private void saveDraft(RunnableConfig execution, int round) throws Exception {
@@ -279,7 +308,80 @@ public class OutlineGenerationWorkflow {
         OutlineMergeInput input = prepareMerge(task);
         TranscriptOutlineDraft draft = generator.buildDraft(topics.toAnalysis(topics.candidates(input.getResults()),
                 stage(taskId, round)), input.getUtterances(), task.getTranscriptVersion());
+        OutlineTaskConfig config = json.readValue(task.getConfigJson(), OutlineTaskConfig.class);
+        if (config.getReviewPromptVersionId() != null) {
+            OutlineMergeResultModel reviewed = mergeStore.find(taskId, reviewHash(round));
+            if (reviewed == null) throw new IllegalStateException("大纲审核结果不存在");
+            draft.getSource().setReviewIssues(json.readValue(reviewed.getOutputJson(), OutlineReviewResult.class).issues());
+        }
         finalizer.save(taskId, draft, token(execution));
+    }
+
+    private void reviewStage(RunnableConfig execution, int round) throws Exception {
+        String taskId = taskId(execution);
+        requireLease(taskId, token(execution));
+        AiGenerationTaskModel task = tasks.findById(taskId);
+        OutlineMergeInput input = prepareMerge(task);
+        OutlineTaskConfig config = json.readValue(task.getConfigJson(), OutlineTaskConfig.class);
+        // 已创建的历史任务没有审核提示词版本，继续原来的生成语义。
+        if (config.getReviewPromptVersionId() == null) {
+            log.info("历史任务跳过新增审核，taskId={}", taskId);
+            return;
+        }
+        if (mergeStore.find(taskId, reviewHash(round)) != null) {
+            log.info("复用大纲审核阶段，taskId={}，round={}", taskId, round);
+            return;
+        }
+        PromptVersion prompt = prompts.version(PromptScenarioCode.TRANSCRIPT_OUTLINE_REVIEW.code(), config.getReviewPromptVersionId());
+        OutlineReviewResult result = reviewer.review(task, token(execution), prompt, stage(taskId, round),
+                topics.candidates(input.getResults()));
+        mergeStore.save(taskId, token(execution), reviewHash(round), result, null);
+    }
+
+    private String reviewHash(int round) throws java.security.NoSuchAlgorithmException {
+        return OutlineMergeStore.hash("outline-review-stage-v1:" + round);
+    }
+
+    private OutlineReviewResult reviewResult(String taskId, int round) throws Exception {
+        OutlineMergeResultModel result = mergeStore.find(taskId, reviewHash(round));
+        if (result == null) throw new IllegalStateException("大纲审核结果不存在");
+        return json.readValue(result.getOutputJson(), OutlineReviewResult.class);
+    }
+
+    private String reviewRoute(RunnableConfig execution, int round) throws Exception {
+        String taskId = taskId(execution);
+        AiGenerationTaskModel task = tasks.findById(taskId);
+        OutlineTaskConfig config = json.readValue(task.getConfigJson(), OutlineTaskConfig.class);
+        if (config.getReviewPromptVersionId() == null) return SAVE;
+        OutlineGroupingProgress progress = stage(taskId, round);
+        int count = progress.revisionCount() == null ? 0 : progress.revisionCount();
+        int limit = config.getMaxReviewRevisions() == null ? 0 : config.getMaxReviewRevisions();
+        int issueCount = reviewResult(taskId, round).issues().size();
+        String next = issueCount > 0 && count < limit ? REVISE : SAVE;
+        log.info("大纲审核路由，taskId={}，round={}，issueCount={}，revisionCount={}，revisionLimit={}，nextNode={}",
+                taskId, round, issueCount, count, limit, next);
+        return next;
+    }
+
+    private Map<String, Object> reviseStage(RunnableConfig execution, int round) throws Exception {
+        String taskId = taskId(execution);
+        String token = token(execution);
+        requireLease(taskId, token);
+        AiGenerationTaskModel task = tasks.findById(taskId);
+        OutlineMergeInput input = prepareMerge(task);
+        int nextRound = round + 1;
+        log.info("大纲修正阶段，taskId={}，sourceRound={}，targetRound={}", taskId, round, nextRound);
+        // 修正完成而检查点尚未推进时，直接复用下一阶段，避免重复调用。
+        if (mergeStore.find(taskId, stageHash(nextRound)) == null) {
+            OutlineTaskConfig config = json.readValue(task.getConfigJson(), OutlineTaskConfig.class);
+            PromptVersion prompt = prompts.version(PromptScenarioCode.TRANSCRIPT_TOPIC_GROUPING.code(),
+                    config.getGroupingPromptVersionId());
+            OutlineGroupingProgress revised = topics.revise(topics.candidates(input.getResults()), stage(taskId, round),
+                    reviewResult(taskId, round), prompt, task.getMeetingId(), task.getActorId(), taskId,
+                    new TopicAnalysisService.BatchCache(mergeStore, taskId, token));
+            mergeStore.save(taskId, token, stageHash(nextRound), revised, revised.lastCallId());
+        }
+        return Map.of(ROUND, nextRound);
     }
 
     private OutlineGroupingProgress stage(String taskId, int round) throws Exception {

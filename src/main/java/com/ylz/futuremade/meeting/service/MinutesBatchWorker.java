@@ -20,6 +20,7 @@ import com.ylz.futuremade.prompt.model.entity.PromptVersion;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.server.ResponseStatusException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -33,6 +34,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** 为纪要 Graph 执行单个已持久化的批次，并在截断时原子拆分。 */
 @Service
+@Slf4j
 public class MinutesBatchWorker {
     private final AiGenerationBatchMapper batches;
     private final AiGenerationTaskMapper tasks;
@@ -66,6 +68,7 @@ public class MinutesBatchWorker {
                 || !Objects.equals(task.getStatus(), GenerationTaskStatus.RUNNING.code())) return false;
         String token = leases.claim(batchId, workerId, leaseSeconds);
         if (token == null) return false;
+        log.info("纪要批次已领取，taskId={}，batchId={}，batchNo={}", task.getId(), batchId, batch.getBatchNo());
         AtomicBoolean lost = new AtomicBoolean(false);
         ScheduledExecutorService heartbeat = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "minutes-batch-lease");
@@ -90,8 +93,12 @@ public class MinutesBatchWorker {
             MinutesBatchExecutionResult execution = generator.generateSingleBatch(input, outline.getSources(), prompt, task.getMeetingId(), outline,
                     task.getActorId(), user.username(), batchId, config);
             if (lost.get()) return false;
-            return leases.complete(batchId, token, json.writeValueAsString(execution.getResult()), execution.getAiCallId());
+            boolean completed = leases.complete(batchId, token, json.writeValueAsString(execution.getResult()), execution.getAiCallId());
+            log.info("纪要批次写入结束，taskId={}，batchId={}，accepted={}，aiCallId={}",
+                    task.getId(), batchId, completed, execution.getAiCallId());
+            return completed;
         } catch (ModelOutputTruncatedException ex) {
+            log.warn("纪要批次输出截断，taskId={}，batchId={}，准备拆分", task.getId(), batchId);
             try {
                 if (!lost.get() && splits.split(batch, token)) return true;
             } catch (Exception splitError) {
@@ -100,6 +107,7 @@ public class MinutesBatchWorker {
             recordFailure(batchId, token, lost, ex);
             throw ex;
         } catch (Exception ex) {
+            log.warn("纪要批次失败，taskId={}，batchId={}，exceptionType={}", task.getId(), batchId, ex.getClass().getName());
             recordFailure(batchId, token, lost, ex);
             throw ex;
         } finally {

@@ -10,12 +10,14 @@ import com.ylz.futuremade.meeting.model.entity.AiGenerationTaskModel;
 import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import java.util.Objects;
 
 /** 查询和重试会议纪要后台任务。 */
 @Service
+@Slf4j
 public class MinutesTaskService {
     private final AiGenerationTaskMapper tasks;private final AiGenerationBatchMapper batches;private final MeetingService meetings;
     public MinutesTaskService(AiGenerationTaskMapper tasks,AiGenerationBatchMapper batches,MeetingService meetings) {
@@ -45,7 +47,9 @@ public class MinutesTaskService {
         tasks.resetOutlineCheckpoint(taskId);
         if(tasks.transition(taskId,GenerationTaskStatus.PARTIAL_FAILED.code(),GenerationTaskStatus.RUNNING.code(),null)!=1)
             throw new IllegalStateException("任务状态更新失败");
-        task.setStatus(GenerationTaskStatus.RUNNING.code());task.setErrorCode(null);return view(task);
+        task.setStatus(GenerationTaskStatus.RUNNING.code());task.setErrorCode(null);
+        log.info("纪要任务已重试（事务内），taskId={}，resetBatches={}", taskId, resetCount);
+        return view(task);
     }
     private AiGenerationTaskModel requireTask(AiGenerationTaskModel task,String meetingId) {
         if(task==null || !meetingId.equals(task.getMeetingId()) || !PromptScenarioCode.MEETING_MINUTES.code().equals(task.getTaskType()))

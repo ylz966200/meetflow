@@ -26,14 +26,16 @@ import java.util.concurrent.TimeUnit;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
 
 import static com.alibaba.cloud.ai.graph.action.AsyncEdgeActionWithConfig.edge_async;
-import static com.alibaba.cloud.ai.graph.action.AsyncNodeActionWithConfig.node_async;
+import static com.ylz.futuremade.common.logging.WorkflowNodeLogging.loggedNode;
 import static com.ylz.futuremade.meeting.service.OutlineCheckpointSaver.LEASE_TOKEN;
 
 /**
  * 编排纪要批次执行、拆分后的继续处理和最终事务汇总。
  */
+@Slf4j
 @Service
 public class MinutesGenerationWorkflow {
     private static final String GENERATE = "generateMinutesBatch";
@@ -65,7 +67,7 @@ public class MinutesGenerationWorkflow {
 
         Map<String, String> routes = Map.of(GENERATE, GENERATE, FINISH, FINISH, WAIT, StateGraph.END);
         this.graph = new StateGraph()
-                .addNode(GENERATE, node_async((state, config) -> {
+                .addNode(GENERATE, loggedNode(GENERATE, (state, config) -> {
                     String taskId = config.threadId().orElseThrow();
                     String token = token(config);
                     requireLease(taskId, token);
@@ -75,7 +77,7 @@ public class MinutesGenerationWorkflow {
                     }
                     return Map.of();
                 }))
-                .addNode(FINISH, node_async((state, config) -> {
+                .addNode(FINISH, loggedNode(FINISH, (state, config) -> {
                     finalizer.finishIfReady(config.threadId().orElseThrow(), token(config));
                     return Map.of();
                 }))
@@ -96,12 +98,16 @@ public class MinutesGenerationWorkflow {
         if (tasks.claimGraph(taskId, PromptScenarioCode.MEETING_MINUTES.code(), GenerationTaskStatus.PENDING.code(),
                 GenerationTaskStatus.RUNNING.code(), owner, attemptToken, leaseSeconds) != 1) return;
 
+        long started = System.nanoTime();
+        log.info("纪要工作流已领取，taskId={}，owner={}", taskId, owner);
         Exception failure = null;
         ScheduledFuture<?> renewal = null;
         try {
             renewal = heartbeat.scheduleWithFixedDelay(() -> {
                 try {
-                    tasks.renewGraph(taskId, attemptToken, leaseSeconds);
+                    if (tasks.renewGraph(taskId, attemptToken, leaseSeconds) != 1) {
+                        log.warn("纪要任务续租未生效，taskId={}", taskId);
+                    }
                 } catch (RuntimeException exception) {
                     ErrorDiagnostics.error("纪要 Graph 续租失败", exception);
                 }
@@ -110,6 +116,8 @@ public class MinutesGenerationWorkflow {
             RunnableConfig config = RunnableConfig.builder().threadId(taskId)
                     .addMetadata(OWNER, owner).addMetadata(LEASE_TOKEN, attemptToken).build();
             Optional<Checkpoint> saved = checkpoints.get(config);
+            log.info("纪要工作流执行位置，taskId={}，resume={}，nextNode={}", taskId,
+                    saved.isPresent(), saved.map(Checkpoint::getNextNodeId).orElse(StateGraph.START));
             if (saved.isPresent()) {
                 if (StateGraph.END.equals(saved.get().getNextNodeId())) {
                     // 上次等待批次租约时正常退出，从起点重新读取批次状态。
@@ -135,8 +143,11 @@ public class MinutesGenerationWorkflow {
             } catch (Exception persistenceFailure) {
                 exception.addSuppressed(persistenceFailure);
             }
+            log.warn("纪要工作流异常退出，taskId={}，exceptionType={}", taskId, exception.getClass().getName());
             throw exception;
         } finally {
+            log.info("纪要工作流本次执行结束，taskId={}，failed={}，durationMs={}", taskId,
+                    failure != null, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
             if (renewal != null) renewal.cancel(false);
             try {
                 tasks.releaseGraph(taskId, attemptToken);
@@ -153,6 +164,7 @@ public class MinutesGenerationWorkflow {
         if (!runnable(taskId).isEmpty()) return GENERATE;
         boolean waiting = statuses.contains(GenerationBatchStatus.PENDING.code())
                 || statuses.contains(GenerationBatchStatus.RUNNING.code());
+        if (waiting) log.info("纪要等待批次租约，本次执行退出，taskId={}", taskId);
         return waiting ? WAIT : FINISH;
     }
 

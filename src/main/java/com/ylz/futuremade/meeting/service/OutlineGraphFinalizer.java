@@ -12,11 +12,13 @@ import com.ylz.futuremade.meeting.model.entity.AiGenerationBatchModel;
 import com.ylz.futuremade.meeting.model.entity.AiGenerationTaskModel;
 import java.util.List;
 import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 /** Graph 结果保存边界：以短事务校验来源并原子更新大纲和任务。 */
 @Service
+@Slf4j
 public class OutlineGraphFinalizer {
     private final AiGenerationTaskMapper tasks;
     private final AiGenerationBatchMapper batches;
@@ -64,6 +66,8 @@ public class OutlineGraphFinalizer {
         }
         if (tasks.complete(taskId, GenerationTaskStatus.RUNNING.code(), GenerationTaskStatus.SUCCEEDED.code(), resultVersion) != 1)
             throw new IllegalStateException("任务完成状态异常");
+        log.info("大纲结果已写入（事务内），taskId={}，resultVersion={}，titleCount={}",
+                taskId, resultVersion, draft.getTitles().size());
     }
 
     /** 将提取阶段的失败反映到任务状态，保留批次记录供重试。 */
@@ -74,6 +78,7 @@ public class OutlineGraphFinalizer {
         if (!token.equals(tasks.lockActiveGraphToken(taskId))) throw new IllegalStateException("大纲 Graph 执行权已失效");
         List<AiGenerationBatchModel> parts = batches.findByTask(taskId);
         boolean changed = parts.stream().anyMatch(part -> "SOURCE_CHANGED".equals(part.getErrorCode()));
+        log.warn("大纲任务分段失败，taskId={}，sourceChanged={}", taskId, changed);
         tasks.transition(taskId, GenerationTaskStatus.RUNNING.code(), changed ? GenerationTaskStatus.SOURCE_CHANGED.code() : GenerationTaskStatus.PARTIAL_FAILED.code(), changed ? "SOURCE_CHANGED" : "BATCH_FAILED");
     }
 }

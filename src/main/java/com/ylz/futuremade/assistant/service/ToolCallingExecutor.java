@@ -64,6 +64,9 @@ public class ToolCallingExecutor {
                     log.warn("本次 AI 任务的工具调用次数已超过提醒阈值（{} 次），继续执行", maxCalls);
                 }
                 String result;
+                long toolStarted = System.nanoTime();
+                log.info("模型工具调用开始，aiCallId={}，tool={}，toolCallCount={}",
+                        audit.getLastCallId(), call.name(), count);
                 boolean validArguments = true;
                 try {
                     result = callback.call(call.arguments());
@@ -83,6 +86,9 @@ public class ToolCallingExecutor {
                 traces.add(trace);
                 prompts.recordToolTrace(audit.getLastCallId(), json.writeValueAsString(traces));
                 if (validArguments) handler.accept(call, result);
+                log.info("模型工具调用完成，aiCallId={}，tool={}，validArguments={}，durationMs={}",
+                        audit.getLastCallId(), call.name(), validArguments,
+                        java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - toolStarted));
                 responses.add(new ToolResponseMessage.ToolResponse(call.id(), call.name(), result));
             }
             messages.add(ToolResponseMessage.builder().responses(responses).build());

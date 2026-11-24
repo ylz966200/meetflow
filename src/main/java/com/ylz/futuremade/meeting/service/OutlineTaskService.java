@@ -20,6 +20,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -34,7 +35,11 @@ import java.util.UUID;
  * 创建、查询和重试会议大纲后台任务。
  */
 @Service
+@Slf4j
 public class OutlineTaskService {
+    /** 新任务固定的审核修正上限，避免恢复时受运行配置变化影响。 */
+    @Value("${meetflow.outline.max-review-revisions:3}")
+    private int maxReviewRevisions = 1;
     private final AiGenerationTaskMapper tasks;
     private final AiGenerationBatchMapper batches;
     private final MeetingService meetings;
@@ -77,6 +82,11 @@ public class OutlineTaskService {
         PromptVersion groupPrompt = prompts.active(PromptScenarioCode.TRANSCRIPT_TOPIC_GROUPING.code());
         OutlineTaskConfig config = new OutlineTaskConfig();
         config.setGroupingPromptVersionId(groupPrompt.getId());
+        config.setReviewPromptVersionId(prompts.active(PromptScenarioCode.TRANSCRIPT_OUTLINE_REVIEW.code()).getId());
+        if (maxReviewRevisions < 0 || maxReviewRevisions > 3) {
+            throw new IllegalArgumentException("大纲自动修正轮数应在0至3之间");
+        }
+        config.setMaxReviewRevisions(maxReviewRevisions);
         AiGenerationTaskModel task = new AiGenerationTaskModel();
         task.setId(UUID.randomUUID().toString());
         task.setRequestKey(key);
@@ -99,6 +109,7 @@ public class OutlineTaskService {
         }
         for (int i = 0; i < chunks.size(); i++)
             insertBatch(task.getId(), String.format(java.util.Locale.ROOT, "%08d", i + 1), json.writeValueAsString(chunks.get(i)));
+        log.info("大纲任务已创建（事务内），taskId={}，meetingId={}，batchCount={}", task.getId(), meetingId, chunks.size());
         return view(task);
     }
 
@@ -157,6 +168,7 @@ public class OutlineTaskService {
             throw new IllegalStateException("任务状态更新失败");
         task.setStatus(GenerationTaskStatus.RUNNING.code());
         task.setErrorCode(null);
+        log.info("大纲任务已重试（事务内），taskId={}，resetBatches={}", id, resetCount);
         return view(task);
     }
 

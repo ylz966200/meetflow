@@ -18,9 +18,11 @@ public class TopicGroupingGroup {
     /**
      * 归纳后的议题名称。
      */
-    @JsonDeserialize(using = StrictStringDeserializer.class) private String topic;
+    @JsonDeserialize(using = StrictStringDeserializer.class)
+    private String topic;
     /**
      * 本组关联的输入编号。
      */
-    @JsonDeserialize(contentUsing = StrictStringDeserializer.class) private List<String> ids;
+    @JsonDeserialize(contentUsing = StrictStringDeserializer.class)
+    private List<String> ids;
 }

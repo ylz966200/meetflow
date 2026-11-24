@@ -19,6 +19,8 @@ public class OutlineSourceSnapshot {
     private Boolean needsReview;
     /** 是否存在未完成全局比较的分组。 */
     private Boolean partialGrouping;
+    /** 生成时的只读审核问题，仅针对当时的候选与归并主题；历史快照为空。 */
+    private List<OutlineReviewIssue> reviewIssues;
     /** 当前版本引用的文字稿片段 ID；历史快照可能为空。 */
     private List<Long> segmentIds;
     /** 来源文字稿的片段内容；新快照持久化时不重复保存，读取时还原。 */

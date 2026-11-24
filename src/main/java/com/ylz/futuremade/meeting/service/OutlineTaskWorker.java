@@ -14,6 +14,7 @@ import com.ylz.futuremade.prompt.enums.PromptScenarioCode;
 import com.ylz.futuremade.prompt.service.PromptService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.nio.charset.StandardCharsets;
@@ -31,6 +32,7 @@ import java.util.List;
  * 执行大纲 Graph 的一个文字稿分段，保存可恢复的提取结果。
  */
 @Service
+@Slf4j
 public class OutlineTaskWorker {
     private final AiGenerationBatchMapper batches;
     private final AiGenerationTaskMapper tasks;
@@ -74,6 +76,7 @@ public class OutlineTaskWorker {
                 && !Objects.equals(task.getStatus(), GenerationTaskStatus.RUNNING.code())) return false;
         String token = leases.claim(batchId, owner, leaseSeconds);
         if (token == null) return false;
+        log.info("大纲分段已领取，taskId={}，batchId={}，batchNo={}", task.getId(), batchId, part.getBatchNo());
         AtomicBoolean lost = new AtomicBoolean(false);
         ScheduledExecutorService heartbeat = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "outline-batch-lease");
@@ -106,8 +109,12 @@ public class OutlineTaskWorker {
             com.ylz.futuremade.prompt.model.entity.PromptVersion prompt = prompts.version(PromptScenarioCode.TRANSCRIPT_EXTRACTION.code(), task.getPromptVersionId());
             ChunkExtractionView result = generator.extractChunk(chunk, all, prompt, task.getMeetingId(), task.getTranscriptVersion(), task.getActorId(), user.username(), batchId);
             if (lost.get()) return false;
-            return leases.complete(batchId, token, json.writeValueAsString(result), null);
+            boolean completed = leases.complete(batchId, token, json.writeValueAsString(result), null);
+            log.info("大纲分段写入结束，taskId={}，batchId={}，accepted={}，candidateCount={}",
+                    task.getId(), batchId, completed, result.getItems().size());
+            return completed;
         } catch (Exception ex) {
+            log.warn("大纲分段失败，taskId={}，batchId={}，exceptionType={}", task.getId(), batchId, ex.getClass().getName());
             boolean changed = ex instanceof ResponseStatusException status && (status.getStatusCode().value() == 403 || status.getStatusCode().value() == 404 || status.getStatusCode().value() == 409);
             String code = changed ? "SOURCE_CHANGED" : "BATCH_FAILED";
             // 保留失败批次供用户重试，写入失败不能覆盖原始异常。

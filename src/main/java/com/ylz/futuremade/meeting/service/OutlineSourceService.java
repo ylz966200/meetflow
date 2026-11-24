@@ -52,6 +52,9 @@ public class OutlineSourceService {
         var indices = candidates.stream().flatMap(item -> item.getEvidenceIndices().stream()).distinct().toList();
         var detail = new com.ylz.futuremade.meeting.model.dto.OutlineSourceDetail();
         detail.setItems(candidates);
+        detail.setReviewIssues(snapshot.getReviewIssues() == null ? List.of() :
+                snapshot.getReviewIssues().stream()
+                        .filter(issue -> issue.candidateIds().stream().anyMatch(ids::contains)).toList());
         if (snapshot.getSegmentIds() != null) {
             var allowedIds = new HashSet<>(snapshot.getSegmentIds());
             var rows = segments.findByIndices(meetingId, snapshot.getTranscriptVersion(), indices);
@@ -110,6 +113,7 @@ public class OutlineSourceService {
         source.setItems(original.getItems());
         source.setNeedsReview(original.getNeedsReview());
         source.setPartialGrouping(original.getPartialGrouping());
+        source.setReviewIssues(original.getReviewIssues());
         source.setSourceSegments(original.getSourceSegments());
         source.setSegmentIds(original.getSegmentIds());
         source.setTranscriptVersion(original.getTranscriptVersion());
@@ -151,6 +155,7 @@ public class OutlineSourceService {
         if(source==null)return null;
         var copy=new OutlineSourceSnapshot();copy.setGroups(source.getGroups());copy.setItems(source.getItems());
         copy.setNeedsReview(source.getNeedsReview());copy.setPartialGrouping(source.getPartialGrouping());
+        copy.setReviewIssues(source.getReviewIssues());
         copy.setSourceSegments(source.getSourceSegments());copy.setTranscriptVersion(source.getTranscriptVersion());return copy;
     }
 

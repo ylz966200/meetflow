@@ -15,6 +15,7 @@ import com.ylz.futuremade.meeting.model.dto.OutlineView;
 import com.ylz.futuremade.meeting.model.entity.AiGenerationBatchModel;
 import com.ylz.futuremade.meeting.model.entity.AiGenerationTaskModel;
 import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import java.util.ArrayList;
@@ -24,6 +25,7 @@ import java.util.Set;
 
 /** 汇总有效子批次，并在同一事务中保存纪要和任务最终状态。 */
 @Service
+@Slf4j
 public class MinutesTaskFinalizer {
     private final AiGenerationTaskMapper tasks; private final AiGenerationBatchMapper batches;
     private final AdminMapper users;
@@ -78,5 +80,7 @@ public class MinutesTaskFinalizer {
         MinutesView saved=minutes.saveGenerated(task.getMeetingId(),task.getActorId(),task.getOutlineVersion(),task.getExpectedResultVersion(),MinutesStructure.fromBatches(outline,items,actions));
         if(tasks.complete(taskId,GenerationTaskStatus.RUNNING.code(),GenerationTaskStatus.SUCCEEDED.code(),saved.getVersion())!=1)
             throw new IllegalStateException("任务完成状态异常");
+        log.info("纪要结果已写入（事务内），taskId={}，resultVersion={}，outlineCount={}，actionCount={}",
+                taskId, saved.getVersion(), items.size(), actions.size());
     }
 }
