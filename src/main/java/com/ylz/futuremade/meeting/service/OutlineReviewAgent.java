@@ -7,13 +7,17 @@ import com.ylz.futuremade.assistant.service.ModelOutputTruncatedException;
 import com.ylz.futuremade.meeting.model.dto.*;
 import com.ylz.futuremade.meeting.model.entity.*;
 import com.ylz.futuremade.prompt.model.entity.PromptVersion;
+
 import java.util.*;
+
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import lombok.extern.slf4j.Slf4j;
 
-/** 新协议一次审核完整大纲标题和摘要，直接返回修正意见；旧任务保留其固定版本的审核语义。 */
+/**
+ * 新协议一次审核完整大纲标题和摘要，直接返回修正意见；旧任务保留其固定版本的审核语义。
+ */
 @Service
 @Slf4j
 public class OutlineReviewAgent {
@@ -23,7 +27,7 @@ public class OutlineReviewAgent {
     private final int maxBytes;
 
     public OutlineReviewAgent(AiModelGateway models, OutlineMergeStore store, ObjectMapper json,
-            @Value("${meetflow.outline.review-max-bytes:24000}") int maxBytes) {
+                              @Value("${meetflow.outline.review-max-bytes:24000}") int maxBytes) {
         if (maxBytes < 1) throw new IllegalArgumentException("审核输入预算必须大于零");
         this.models = models;
         this.store = store;
@@ -31,9 +35,11 @@ public class OutlineReviewAgent {
         this.maxBytes = maxBytes;
     }
 
-    /** 第三版起每轮只审核完整议题摘要；旧版任务继续使用原有候选审核流程。 */
+    /**
+     * 第三版起每轮只审核完整议题摘要；旧版任务继续使用原有候选审核流程。
+     */
     public OutlineReviewResult review(AiGenerationTaskModel task, String token, PromptVersion prompt,
-            OutlineGroupingProgress grouping, Map<String, TopicCandidate> candidates) throws Exception {
+                                      OutlineGroupingProgress grouping, Map<String, TopicCandidate> candidates) throws Exception {
         // 新版本使用议题协议；已创建的旧任务继续使用其固定提示词对应的输入格式。
         if (prompt.getVersion() != null && prompt.getVersion() >= 3) {
             return reviewTopics(task, token, prompt, grouping, candidates);
@@ -67,15 +73,16 @@ public class OutlineReviewAgent {
     }
 
     private OutlineReviewResult reviewDetails(AiGenerationTaskModel task, String token, PromptVersion prompt,
-            OutlineGroupingProgress grouping, Map<String, TopicCandidate> candidates,
-            List<OutlineReviewIssue> issues, Set<String> questioned) throws Exception {
+                                              OutlineGroupingProgress grouping, Map<String, TopicCandidate> candidates,
+                                              List<OutlineReviewIssue> issues, Set<String> questioned) throws Exception {
         for (TopicGroupingGroup group : grouping.groups()) {
             if (group.getIds().stream().noneMatch(questioned::contains)) continue;
             List<TopicCandidate> batch = new ArrayList<>();
             for (String id : group.getIds()) {
                 TopicCandidate candidate = candidates.get(id);
                 batch.add(candidate);
-                if (json.writeValueAsBytes(new OutlineReviewInput(group.getTopic(), batch)).length <= maxBytes) continue;
+                if (json.writeValueAsBytes(new OutlineReviewInput(group.getTopic(), batch)).length <= maxBytes)
+                    continue;
                 batch.remove(batch.size() - 1);
                 if (!batch.isEmpty()) issues.addAll(reviewBatch(task, token, prompt,
                         new OutlineReviewInput(group.getTopic(), List.copyOf(batch))).issues());
@@ -94,7 +101,7 @@ public class OutlineReviewAgent {
     }
 
     private OutlineReviewResult reviewTopics(AiGenerationTaskModel task, String token, PromptVersion prompt,
-            OutlineGroupingProgress grouping, Map<String, TopicCandidate> candidates) throws Exception {
+                                             OutlineGroupingProgress grouping, Map<String, TopicCandidate> candidates) throws Exception {
         if (grouping.groups().isEmpty()) return new OutlineReviewResult(List.of());
         OutlineTopicReviewRequest request = topicRequest(grouping.groups(), candidates);
         String serialized = json.writeValueAsString(request);
@@ -125,7 +132,7 @@ public class OutlineReviewAgent {
     }
 
     private OutlineTopicReviewRequest topicRequest(List<TopicGroupingGroup> groups,
-            Map<String, TopicCandidate> candidates) throws Exception {
+                                                   Map<String, TopicCandidate> candidates) throws Exception {
         for (int limit : new int[]{600, 300, 120, 30}) {
             List<OutlineTopicReviewItem> topics = new ArrayList<>();
             for (int index = 0; index < groups.size(); index++) {
@@ -164,7 +171,7 @@ public class OutlineReviewAgent {
     }
 
     private OutlineReviewInput summaryInput(String title, List<TopicCandidate> ordered,
-            List<TopicGroupingGroup> groups) throws Exception {
+                                            List<TopicGroupingGroup> groups) throws Exception {
         for (int chars : new int[]{120, 30, 0}) {
             List<TopicCandidate> summaries = new ArrayList<>();
             for (TopicCandidate candidate : ordered) {
@@ -184,7 +191,7 @@ public class OutlineReviewAgent {
     }
 
     private OutlineReviewResult reviewBatch(AiGenerationTaskModel task, String token, PromptVersion prompt,
-            OutlineReviewInput input) throws Exception {
+                                            OutlineReviewInput input) throws Exception {
         String serialized = json.writeValueAsString(input);
         String hash = OutlineMergeStore.hash("outline-review-v2:" + prompt.getId() + ":" + serialized);
         OutlineMergeResultModel cached = store.find(task.getId(), hash);

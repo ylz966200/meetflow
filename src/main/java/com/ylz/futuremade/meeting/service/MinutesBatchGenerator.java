@@ -24,19 +24,21 @@ import java.util.*;
 public class MinutesBatchGenerator {
     private final ToolCallingExecutor executor;
     private final MeetingService meetings;
+    private final TranscriptSegmentStore segments;
     private final ObjectMapper json;
     private final int maxBatchBytes;
     private final int maxToolCalls;
     private final int maxSourceSegments;
     private final int maxSourceChars;
 
-    public MinutesBatchGenerator(ToolCallingExecutor executor, MeetingService meetings,
+    public MinutesBatchGenerator(ToolCallingExecutor executor, MeetingService meetings, TranscriptSegmentStore segments,
                                  ObjectMapper json, @Value("${meetflow.minutes.batch-max-bytes:24000}") int maxBatchBytes,
                                  @Value("${meetflow.minutes.max-tool-calls:4}") int maxToolCalls,
                                  @Value("${meetflow.minutes.max-source-segments:20}") int maxSourceSegments,
                                  @Value("${meetflow.minutes.max-source-chars:6000}") int maxSourceChars) {
         this.executor = executor;
         this.meetings = meetings;
+        this.segments = segments;
         this.json = json;
         this.maxBatchBytes = maxBatchBytes;
         this.maxToolCalls = maxToolCalls;
@@ -150,54 +152,62 @@ public class MinutesBatchGenerator {
      */
     public MinutesBatchExecutionResult generateSingleBatch(List<MinutesOutlineInput> batch, OutlineSourceSnapshot source, PromptVersion prompt,
                                                            String meetingId, OutlineView outline, long actor, String username, String key, MinutesTaskConfig config) throws Exception {
-        var audit = new AiCallContext(prompt, meetingId, outline.getTranscriptVersion(), actor, key, outline.getVersion());
-        var sourceTool = new MinutesSourceTools(batch, source.getSourceSegments(), config.getMaxSourceSegments(), config.getMaxSourceChars(),
+        AiCallContext audit = new AiCallContext(prompt, meetingId, outline.getTranscriptVersion(), actor, key, outline.getVersion());
+        // 没有片段 ID 的历史快照保存了原文，需使用快照中的内容。
+        List<OutlineSourceSegment> legacy = source.getSegmentIds() == null ? source.getSourceSegments() : null;
+        MinutesSourceTools sourceTool = new MinutesSourceTools(segments, meetingId, outline.getTranscriptVersion(), legacy,
+                config.getMaxSourceSegments(), config.getMaxSourceChars(),
                 () -> meetings.requireOutlineEditor(meetingId, actor, false));
         meetings.requireOutlineEditor(meetingId, actor, false);
-        var callbacks = org.springframework.ai.support.ToolCallbacks.from(sourceTool);
+        org.springframework.ai.tool.ToolCallback[] callbacks = org.springframework.ai.support.ToolCallbacks.from(sourceTool);
         String input = json.writeValueAsString(batch);
         String output = executor.execute(audit, input, callbacks, config.getMaxToolCalls(), (call, returned) -> {
         });
-        var result = json.readValue(output, MinutesBatchResponse.class);
-        validate(batch, result);
-        var execution = new MinutesBatchExecutionResult();
+        MinutesBatchResponse result = json.readValue(output, MinutesBatchResponse.class);
+        validate(batch, source, meetingId, outline.getTranscriptVersion(), result);
+        MinutesBatchExecutionResult execution = new MinutesBatchExecutionResult();
         execution.setResult(result);
         execution.setAiCallId(audit.getLastCallId());
         return execution;
     }
 
-    private void validate(List<MinutesOutlineInput> batch, MinutesBatchResponse result) {
+    private void validate(List<MinutesOutlineInput> batch, OutlineSourceSnapshot source, String meetingId,
+                          int transcriptVersion, MinutesBatchResponse result) {
         if (result == null || result.getMinutes() == null || result.getActions() == null)
             throw new IllegalArgumentException("纪要结果格式无效");
-        Map<Integer, Set<Integer>> allowed = new HashMap<>();
-        for (var item : batch) {
-            Set<Integer> ids = new HashSet<>();
-            for (var candidate : item.getCandidates()) ids.addAll(candidate.getEvidenceIndices());
-            allowed.put(item.getOutlineId(), ids);
+        Set<Integer> validSegmentIds = new HashSet<>();
+        if (source.getSegmentIds() == null) {
+            for (OutlineSourceSegment segment : source.getSourceSegments()) validSegmentIds.add(segment.getSegmentIndex());
+        } else {
+            for (com.ylz.futuremade.meeting.model.entity.TranscriptSegmentModel segment : segments.find(meetingId, transcriptVersion)) {
+                validSegmentIds.add(segment.getSequenceNo());
+            }
         }
+        Set<Integer> outlineIds = new HashSet<>();
+        for (MinutesOutlineInput item : batch) outlineIds.add(item.getOutlineId());
         Set<Integer> covered = new HashSet<>();
-        for (var item : result.getMinutes()) {
-            if (item == null || !covered.add(item.getOutlineId()) || !validMinutesItem(allowed, item))
+        for (MinutesBatchItem item : result.getMinutes()) {
+            if (item == null || !covered.add(item.getOutlineId()) || !validMinutesItem(outlineIds, validSegmentIds, item))
                 throw new IllegalArgumentException("纪要条目或来源无效");
         }
-        if (!covered.equals(allowed.keySet())) throw new IllegalArgumentException("纪要未完整覆盖本批大纲");
-        for (var item : result.getActions())
-            if (item == null || item.getContent() == null || item.getContent().isBlank() || item.getNeedsReview() == null || !validSources(allowed, item.getOutlineId(), item.getSourceSegmentIds()))
+        if (!covered.equals(outlineIds)) throw new IllegalArgumentException("纪要未完整覆盖本批大纲");
+        for (MinutesActionItem item : result.getActions())
+            if (item == null || item.getContent() == null || item.getContent().isBlank() || item.getNeedsReview() == null || !validSources(outlineIds, validSegmentIds, item.getOutlineId(), item.getSourceSegmentIds()))
                 throw new IllegalArgumentException("行动项或来源无效");
     }
 
-    private boolean validSources(Map<Integer, Set<Integer>> allowed, Integer outlineId, List<Integer> ids) {
-        return allowed.containsKey(outlineId) && ids != null && !ids.isEmpty() && allowed.get(outlineId).containsAll(ids);
+    private boolean validSources(Set<Integer> outlineIds, Set<Integer> validSegmentIds, Integer outlineId, List<Integer> ids) {
+        return outlineIds.contains(outlineId) && ids != null && !ids.isEmpty() && validSegmentIds.containsAll(ids);
     }
 
-    private boolean validMinutesItem(Map<Integer, Set<Integer>> allowed, MinutesBatchItem item) {
+    private boolean validMinutesItem(Set<Integer> outlineIds, Set<Integer> validSegmentIds, MinutesBatchItem item) {
         if (item.getDiscussion() == null && item.getConclusions() == null)
             return item.getContent() != null && !item.getContent().isBlank() && item.getNeedsReview() != null
-                    && validSources(allowed, item.getOutlineId(), item.getSourceSegmentIds());
+                    && validSources(outlineIds, validSegmentIds, item.getOutlineId(), item.getSourceSegmentIds());
         if (item.getDiscussion() == null || item.getConclusions() == null
                 || item.getDiscussion().isEmpty() && item.getConclusions().isEmpty()) return false;
         return java.util.stream.Stream.concat(item.getDiscussion().stream(), item.getConclusions().stream())
                 .allMatch(point -> point != null && point.getContent() != null && !point.getContent().isBlank()
-                        && point.getNeedsReview() != null && validSources(allowed, item.getOutlineId(), point.getSourceSegmentIds()));
+                        && point.getNeedsReview() != null && validSources(outlineIds, validSegmentIds, item.getOutlineId(), point.getSourceSegmentIds()));
     }
 }
