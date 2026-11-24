@@ -50,7 +50,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.server.ResponseStatusException;
 
 import static com.alibaba.cloud.ai.graph.action.AsyncEdgeActionWithConfig.edge_async;
-import static com.ylz.futuremade.common.logging.WorkflowNodeLogging.loggedNode;
+import static com.alibaba.cloud.ai.graph.action.AsyncNodeActionWithConfig.node_async;
+import com.ylz.futuremade.common.logging.WorkflowNodeLogging;
 import static com.ylz.futuremade.meeting.service.OutlineCheckpointSaver.LEASE_TOKEN;
 import static com.ylz.futuremade.meeting.service.OutlineCheckpointSaver.ROUND;
 
@@ -111,25 +112,25 @@ public class OutlineGenerationWorkflow {
         this.reviewer = reviewer;
         Map<String, String> mergeRoutes = Map.of(CROSS_MERGE, CROSS_MERGE, REVIEW, REVIEW);
         this.graph = new StateGraph(() -> Map.of(ROUND, new ReplaceStrategy()))
-                .addNode(EXTRACT, loggedNode(EXTRACT, (state, config) -> {
+                .addNode(EXTRACT, node_async((state, config) -> {
                     String taskId = taskId(config);
                     requireLease(taskId, token(config));
                     extract(taskId, (String) config.metadata(OWNER).orElseThrow());
                     return Map.of();
                 }))
-                .addNode(MERGE, loggedNode(MERGE, (state, config) -> mergeStage(config, 0)))
-                .addNode(CROSS_MERGE, loggedNode(CROSS_MERGE, (state, config) -> mergeStage(config, state.<Integer>value(ROUND).orElseThrow() + 1)))
-                .addNode(REVISE, loggedNode(REVISE, (state, config) ->
+                .addNode(MERGE, node_async((state, config) -> mergeStage(config, 0)))
+                .addNode(CROSS_MERGE, node_async((state, config) -> mergeStage(config, state.<Integer>value(ROUND).orElseThrow() + 1)))
+                .addNode(REVISE, node_async((state, config) ->
                         reviseStage(config, state.<Integer>value(ROUND).orElseThrow())))
-                .addNode(REVIEW, loggedNode(REVIEW, (state, config) -> {
+                .addNode(REVIEW, node_async((state, config) -> {
                     reviewStage(config, state.<Integer>value(ROUND).orElseThrow());
                     return Map.of();
                 }))
-                .addNode(SAVE, loggedNode(SAVE, (state, config) -> {
+                .addNode(SAVE, node_async((state, config) -> {
                     saveDraft(config, state.<Integer>value(ROUND).orElseThrow());
                     return Map.of();
                 }))
-                .addNode(FAIL, loggedNode(FAIL, (state, config) -> {
+                .addNode(FAIL, node_async((state, config) -> {
                     finalizer.failIfNeeded(taskId(config), token(config));
                     return Map.of();
                 }))
@@ -145,7 +146,8 @@ public class OutlineGenerationWorkflow {
                 .addEdge(SAVE, StateGraph.END)
                 .addEdge(FAIL, StateGraph.END)
                 .compile(CompileConfig.builder().recursionLimit(MAX_GRAPH_STEPS).releaseThread(false)
-                        .saverConfig(SaverConfig.builder().register(checkpoints).build()).build());
+                        .saverConfig(SaverConfig.builder().register(checkpoints).build())
+                        .withLifecycleListener(new WorkflowNodeLogging()).build());
     }
 
     /**

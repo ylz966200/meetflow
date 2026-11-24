@@ -29,7 +29,8 @@ import org.springframework.stereotype.Service;
 import lombok.extern.slf4j.Slf4j;
 
 import static com.alibaba.cloud.ai.graph.action.AsyncEdgeActionWithConfig.edge_async;
-import static com.ylz.futuremade.common.logging.WorkflowNodeLogging.loggedNode;
+import static com.alibaba.cloud.ai.graph.action.AsyncNodeActionWithConfig.node_async;
+import com.ylz.futuremade.common.logging.WorkflowNodeLogging;
 import static com.ylz.futuremade.meeting.service.OutlineCheckpointSaver.LEASE_TOKEN;
 
 /**
@@ -67,7 +68,7 @@ public class MinutesGenerationWorkflow {
 
         Map<String, String> routes = Map.of(GENERATE, GENERATE, FINISH, FINISH, WAIT, StateGraph.END);
         this.graph = new StateGraph()
-                .addNode(GENERATE, loggedNode(GENERATE, (state, config) -> {
+                .addNode(GENERATE, node_async((state, config) -> {
                     String taskId = config.threadId().orElseThrow();
                     String token = token(config);
                     requireLease(taskId, token);
@@ -77,7 +78,7 @@ public class MinutesGenerationWorkflow {
                     }
                     return Map.of();
                 }))
-                .addNode(FINISH, loggedNode(FINISH, (state, config) -> {
+                .addNode(FINISH, node_async((state, config) -> {
                     finalizer.finishIfReady(config.threadId().orElseThrow(), token(config));
                     return Map.of();
                 }))
@@ -87,7 +88,8 @@ public class MinutesGenerationWorkflow {
                         route(config.threadId().orElseThrow())), routes)
                 .addEdge(FINISH, StateGraph.END)
                 .compile(CompileConfig.builder().recursionLimit(MAX_GRAPH_STEPS).releaseThread(false)
-                        .saverConfig(SaverConfig.builder().register(checkpoints).build()).build());
+                        .saverConfig(SaverConfig.builder().register(checkpoints).build())
+                        .withLifecycleListener(new WorkflowNodeLogging()).build());
     }
 
     /**
