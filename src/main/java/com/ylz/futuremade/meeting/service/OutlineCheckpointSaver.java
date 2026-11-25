@@ -7,6 +7,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.meeting.mapper.AiGenerationTaskMapper;
 import com.ylz.futuremade.meeting.model.dto.OutlineGraphCheckpoint;
+import com.ylz.futuremade.meeting.model.dto.GenerationTaskView;
+import com.ylz.futuremade.meeting.enums.GenerationProgressStage;
 
 import java.util.Collection;
 import java.util.HashMap;
@@ -57,6 +59,18 @@ public class OutlineCheckpointSaver implements BaseCheckpointSaver {
     public Tag release(RunnableConfig config) {
         // 终态检查点保留在任务行，和任务一同管理生命周期。
         return new Tag(taskId(config), list(config));
+    }
+
+    /**
+     * 将持久化检查点转换为查询展示数据；它不代表节点当前正在运行。
+     */
+    public void addProgress(GenerationTaskView view) {
+        Optional<Checkpoint> saved = read(RunnableConfig.builder().threadId(view.getTaskId()).build());
+        saved.ifPresent(checkpoint -> {
+            view.setCheckpointStage(GenerationProgressStage.codeOf(checkpoint.getNodeId()));
+            view.setCheckpointNextStage(GenerationProgressStage.codeOf(checkpoint.getNextNodeId()));
+            view.setCheckpointRound((Integer) checkpoint.getState().get(ROUND));
+        });
     }
 
     private Optional<Checkpoint> read(RunnableConfig config) {

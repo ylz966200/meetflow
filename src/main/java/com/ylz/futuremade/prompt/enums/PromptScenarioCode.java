@@ -4,6 +4,8 @@ package com.ylz.futuremade.prompt.enums;
  * 系统内置的提示词业务场景，编码与数据库和接口保持一致。
  */
 public enum PromptScenarioCode {
+    /** 基于授权会议的资料开展多步研究。 */
+    MEETING_RESEARCH("MEETING_RESEARCH"),
     /**
      * 基于预期事实与检索来源评审会议知识问答。
      */

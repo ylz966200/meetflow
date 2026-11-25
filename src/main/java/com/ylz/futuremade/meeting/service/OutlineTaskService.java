@@ -206,6 +206,7 @@ public class OutlineTaskService {
                 }
             }
         }
+        new OutlineCheckpointSaver(tasks, json).addProgress(view);
         return view;
     }
 }

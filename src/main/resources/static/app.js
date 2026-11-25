@@ -14,6 +14,18 @@ const labels = {
     admin: '管理后台'
 };
 const el = id => document.getElementById(id);
+// 仅展示持久化的 Graph 检查点；节点不一定仍在运行。
+function generationCheckpointText(task) {
+    const stages = {10:'分段提取',20:'首轮归并',30:'跨批归并',40:'大纲审核',50:'大纲修正',60:'保存大纲',70:'处理失败',80:'生成纪要批次',90:'汇总纪要'};
+    const last = stages[task.checkpointStage];
+    const next = stages[task.checkpointNextStage];
+    if (!last && !next) return '';
+    let text = ' · 已保存检查点：' + (last || '起点');
+    if (task.checkpointRound != null) text += '（归并轮次 ' + task.checkpointRound + '）';
+    if (next) text += '，恢复位置：' + next;
+    return text;
+}
+
 // 与后端 MinutesService.MAX_CONTENT_LENGTH 一致，按 UTF-16 单元计数。
 const MINUTES_MAX_CONTENT_LENGTH = 200000;
 // 与后端 BusinessStatus 的稳定状态码保持一致。
@@ -176,6 +188,10 @@ async function setupKnowledge() {
     const bypassCache = document.createElement('input'); bypassCache.type = 'checkbox';
     bypassLabel.append(bypassCache, document.createTextNode(' 跳过缓存重新生成'));
     el('knowledge-form').querySelector('div').prepend(bypassLabel);
+    const researchLabel = document.createElement('label'); researchLabel.className = 'tiny-note';
+    const researchMode = document.createElement('input'); researchMode.type = 'checkbox';
+    researchLabel.append(researchMode, document.createTextNode(' 会议研究（独立问题，不使用对话历史）'));
+    el('knowledge-form').querySelector('div').prepend(researchLabel);
     let page = 1, statusTimer, chatEpoch = 0, searchSequence = 0;
     const conversations = new Map();
     const conversationIds = new Map();
@@ -191,6 +207,13 @@ async function setupKnowledge() {
             const user = document.createElement('div'); user.className = 'message user'; user.textContent = turn.question; result.append(user);
             const reply = document.createElement('div'); reply.className = 'message assistant'; reply.textContent = turn.answer; result.append(reply);
             if (turn.missingMeetings?.length) { const note = document.createElement('p'); note.className = 'tiny-note'; note.textContent = '未召回纪要内容：' + turn.missingMeetings.join('、'); reply.append(note); }
+            if (turn.todos?.length) {
+                const plan = document.createElement('div'); plan.className = 'tiny-note';
+                const heading = document.createElement('strong'); heading.textContent = '研究步骤'; plan.append(heading);
+                const list = document.createElement('ol');
+                turn.todos.forEach(item => { const step = document.createElement('li'); step.textContent = `${item.content}（${({1:'待处理', 2:'进行中', 3:'已完成'})[item.status] || '未知'}）`; list.append(step); });
+                plan.append(list); reply.append(plan);
+            }
             if (turn.cached) { const badge = document.createElement('p'); badge.className = 'tiny-note'; badge.textContent = '已复用缓存回答'; reply.append(badge); }
             if (turn.sources?.length) {
                 const details = document.createElement('details'); details.className = 'knowledge-sources';
@@ -285,11 +308,11 @@ async function setupKnowledge() {
         const pending = document.createElement('div'); pending.className = 'message assistant'; pending.textContent = '正在检索并生成回答……'; result.append(pendingQuestion, pending); result.scrollTop = result.scrollHeight;
         try {
             const meetings = turns[0]?.meetings || ids.map(meetingId => ({meetingId}));
-            const response = await api('/api/knowledge/answers', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question, conversationId: session, meetings, bypassCache: bypassCache.checked})});
+            const response = await api(researchMode.checked ? '/api/knowledge/research' : '/api/knowledge/answers', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question, conversationId: session, meetings, bypassCache: bypassCache.checked})});
             const data = await response.json();
             if (!response.ok) throw new Error(data.message || '问答失败，请检查权限和索引状态。');
             if (!document.contains(select) || conversationIds.get(selectedScope) !== session) return;
-            turns.push({question, answer: data.answer, meetings: data.meetings, sources: data.sources, missingMeetings: data.missingMeetings, cached: data.cached});
+            turns.push({question, answer: data.answer, meetings: data.meetings, sources: data.sources, missingMeetings: data.missingMeetings, cached: data.cached, todos: data.todos});
             conversations.set(selectedScope, turns);
             if (scope() === selectedScope) { el('knowledge-question').value = ''; renderConversation(); }
         } catch (error) { if (document.contains(select) && scope() === selectedScope && epoch === chatEpoch) { pending.textContent = error.message; pending.classList.add('knowledge-error'); } }
@@ -1812,7 +1835,7 @@ async function setupMinutes(id, role, transcriptDirty) {
         if (!document.contains(panel) || !task) return;
         currentTask = task;
         const states = {1:'等待执行',2:'生成中',3:'部分失败',4:'已完成',5:'来源已变化',6:'已取消'};
-        taskInfo.textContent = '后台任务：' + (states[task.status] || '未知状态') + ' · 已完成 ' + task.succeededBatches + ' / ' + task.totalBatches + ' 批' + (task.failedBatches ? ' · 失败 ' + task.failedBatches + ' 批' : '');
+        taskInfo.textContent = '后台任务：' + (states[task.status] || '未知状态') + ' · 已完成 ' + task.succeededBatches + ' / ' + task.totalBatches + ' 批' + (task.failedBatches ? ' · 失败 ' + task.failedBatches + ' 批' : '') + generationCheckpointText(task);
         retryButton.classList.toggle('hidden', task.status !== 3 || (task.failedBatches === 0 && task.errorCode !== 'GRAPH_FAILED'));
         if(task.errorCode === 'OUTPUT_TOO_LONG') message.textContent='生成内容超过纪要长度上限，请精简大纲后重新生成。';
         clearTimeout(taskTimer);
@@ -2369,8 +2392,8 @@ async function setupOutline(id, role, transcriptVersion, transcriptDirty) {
     async function showTask(task) {
         if(!document.contains(panel) || !task)return;
         currentTask=task;
-        const states={1:'等待执行',2:task.totalBatches>0 && task.succeededBatches>=task.totalBatches?'归并中':'分段提取中',3:'部分失败',4:'已完成',5:'来源或权限已变化',6:'已取消'};
-        taskInfo.textContent='大纲后台任务：'+(states[task.status] || '未知状态')+' · 已完成 '+task.succeededBatches+' / '+task.totalBatches+' 个分段'+(task.failedBatches?' · 失败 '+task.failedBatches+' 个':'');
+        const states={1:'等待执行',2:'执行中',3:'部分失败',4:'已完成',5:'来源或权限已变化',6:'已取消'};
+        taskInfo.textContent='大纲后台任务：'+(states[task.status] || '未知状态')+' · 已完成 '+task.succeededBatches+' / '+task.totalBatches+' 个分段'+(task.failedBatches?' · 失败 '+task.failedBatches+' 个':'') + generationCheckpointText(task);
         const emptyChunks = (task.suspiciousChunks || []).join('、');
         if (emptyChunks) taskInfo.textContent += ` · 第 ${emptyChunks} 段未提取到内容，可根据需要核对原文。`;
         retryButton.classList.toggle('hidden',task.status!==3 || (task.failedBatches===0 && task.errorCode!=='GRAPH_FAILED'));
