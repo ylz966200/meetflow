@@ -26,12 +26,14 @@ public class OaTaskService {
     private final OaActionPreviewService previews;
     private final AccountMapper accounts;
     private final OaTaskMapper tasks;
+    private final OaTaskSourceService sources;
 
-    public OaTaskService(MeetingService meetings, OaActionPreviewService previews, AccountMapper accounts, OaTaskMapper tasks) {
+    public OaTaskService(MeetingService meetings, OaActionPreviewService previews, AccountMapper accounts, OaTaskMapper tasks, OaTaskSourceService sources) {
         this.meetings = meetings;
         this.previews = previews;
         this.accounts = accounts;
         this.tasks = tasks;
+        this.sources = sources;
     }
 
     /** 短事务内锁定会议并校验最新纪要，重复创建由数据库唯一约束阻止。 */
@@ -76,7 +78,9 @@ public class OaTaskService {
     /** 会议成员可以查看本会议的待办，包括历史纪要版本。 */
     public List<OaTaskView> list(String meetingId, long actor) {
         meetings.members(meetingId, actor);
-        return tasks.list(meetingId);
+        List<OaTaskView> result = tasks.list(meetingId);
+        sources.enrich(meetingId, result);
+        return result;
     }
 
     /** 负责人或会议编辑者可以按合法状态流转待办。 */

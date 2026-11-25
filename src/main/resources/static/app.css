@@ -76,3 +76,19 @@
 .oa-task-controls{display:flex;flex-wrap:wrap;gap:8px;margin-top:13px}.oa-task-controls .button{padding:8px 12px}
 @media(max-width:850px){.oa-action-fields{grid-template-columns:repeat(2,minmax(0,1fr))}.oa-field-content{grid-column:1/-1}}
 @media(max-width:540px){.oa-heading{align-items:flex-start}.oa-action-fields{grid-template-columns:1fr}.oa-field-content{grid-column:auto}.oa-action-footer{align-items:flex-start;flex-direction:column}.oa-action-footer .button{width:100%}.oa-task-header{align-items:flex-start}}
+
+
+/* 待办追踪来源按会议和纪要条目展示，避免将正文压成一段。 */
+.tracking-source-card{margin:12px 0;padding:14px 16px;border:1px solid #dde9df;border-radius:9px;background:#fff;overflow-wrap:anywhere}
+.tracking-source-meta{font-size:12px;color:#718777;margin-bottom:6px}
+.tracking-source-title{display:block;color:#254532;font-size:14px}
+.tracking-source-content{white-space:pre-wrap;line-height:1.65;color:#43584a;margin:8px 0 12px}
+.tracking-source-card .button{margin-top:4px}
+
+.tracking-candidate{background:#fff;border:1px solid #dce8df;border-radius:12px;padding:18px;margin:14px 0;color:#344d3e;line-height:1.7}
+.tracking-candidate-header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;font-size:15px}
+.tracking-relation{flex-shrink:0;font-size:12px;color:#246544;background:#eaf4ed;border-radius:20px;padding:2px 10px}
+.tracking-candidate p{margin:10px 0;overflow-wrap:anywhere}
+.tracking-candidate details{margin:12px 0;color:#536f5d}
+.tracking-candidate .button{margin-top:12px}
+@media(max-width:600px){.tracking-candidate-header{flex-direction:column}.tracking-candidate{padding:14px}}

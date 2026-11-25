@@ -74,6 +74,24 @@ class ChunkExtractionAgentTest {
         verify(prompts,times(2)).recordToolTrace(eq(42L),anyString());
     }
 
+    @Test
+    void frameworkRejectsToolOutsideRequestScope() {
+        AiModelGateway model = mock(AiModelGateway.class);
+        PromptService prompts = mock(PromptService.class);
+        AssistantMessage.ToolCall unauthorized = new AssistantMessage.ToolCall("unauthorized", "function",
+                "currentWeather", "{\"location\":\"北京\"}");
+        when(model.call(any(), any(Prompt.class))).thenReturn(response(
+                AssistantMessage.builder().content("").toolCalls(List.of(unauthorized)).build()));
+        ToolCallingExecutor executor = new ToolCallingExecutor(model, prompts, new ObjectMapper());
+        MeetingContextTools allowed = context(new MeetingContextProperties()).getTools();
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> executor.execute(audit(), "提取会议议题", ToolCallbacks.from(allowed), 4,
+                        (call, result) -> fail("未授权工具不应执行")));
+        assertEquals("模型请求了未授权的工具", failure.getMessage());
+        verifyNoInteractions(prompts);
+        verify(model).call(any(), any(Prompt.class));
+    }
+
     @Test void refusesToExtractOnlyFromContext() {
         var model=mock(AiModelGateway.class);var tools=mock(AuthorizedToolRegistry.class); when(tools.forUserScoped(anyString(), any())).thenAnswer(inv -> ToolCallbacks.from((Object) inv.getArgument(1))); var prompts=mock(PromptService.class);var properties=new MeetingContextProperties();
         var previous=utterance(0,"预算十万");var current=utterance(1,"继续讨论");

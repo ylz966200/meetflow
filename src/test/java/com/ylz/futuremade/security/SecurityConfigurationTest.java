@@ -26,7 +26,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.driver-class-name=org.h2.Driver", "spring.datasource.username=sa", "spring.datasource.password=",
         "meetflow.jwt.secret-base64=dGVzdC1rZXktZm9yLW1lZXRmbG93LW9ubHktMzItYnl0ZXMtbWluaW11bQ==",
         "meetflow.speech.api-key=",
-        "meetflow.speech.poll.enabled=false"
+        "meetflow.speech.poll.enabled=false",
+        "meetflow.tracking.background.enabled=false"
 })
 @AutoConfigureMockMvc
 class SecurityConfigurationTest {

@@ -1557,6 +1557,11 @@ async function setupOaTasks(meetingId, role) {
             description.className = 'oa-task-meta';
             description.textContent = `负责人：${task.assigneeUsername}　·　截止：${task.dueDate}　·　来源纪要版本 ${task.minutesVersion}`;
             row.append(taskHeader, description);
+            const outlineSource = document.createElement('p'); outlineSource.className = 'oa-task-meta';
+            outlineSource.textContent = task.outlineId != null
+                ? `来源大纲：版本 ${task.outlineVersion} · 第 ${task.outlineId} 项${task.outlineTitle ? ' · ' + task.outlineTitle : ''}`
+                : '来源大纲：未记录具体条目';
+            row.append(outlineSource);
             const history = document.createElement('details');
             history.className = 'oa-task-history';
             const summary = document.createElement('summary');
@@ -1575,6 +1580,127 @@ async function setupOaTasks(meetingId, role) {
                 } catch (error) { el('oa-message').textContent = error.message; }
             });
             row.append(history);
+            const tracking = document.createElement('details'); tracking.className = 'oa-task-history';
+            const trackingTitle = document.createElement('summary'); trackingTitle.textContent = '跨会议追踪进展'; tracking.append(trackingTitle);
+            const trackingBody = document.createElement('div'); tracking.append(trackingBody);
+            tracking.addEventListener('toggle', async () => {
+                if (!tracking.open || tracking.dataset.loaded) return;
+                const trackingBase = `${base}/tasks/${encodeURIComponent(task.id)}/tracking`;
+                try {
+                    const links = await request(`${trackingBase}/links`);
+                    const heading = document.createElement('p'); heading.textContent = '已确认的会议来源'; trackingBody.append(heading);
+                    const saved = document.createElement('div'); trackingBody.append(saved);
+                    function showSource(source, target) {
+                        target.classList.add('tracking-source-card');
+                        const meta = document.createElement('div'); meta.className = 'tracking-source-meta';
+                        meta.textContent = `${source.meetingTitle || source.meetingId} · 纪要版本 ${source.minutesVersion} · 第 ${Number(source.sectionIndex) + 1} 条`;
+                        const title = document.createElement('strong'); title.className = 'tracking-source-title'; title.textContent = source.title || '会议纪要';
+                        const content = document.createElement('p'); content.className = 'tracking-source-content'; content.textContent = source.content || '暂无正文';
+                        target.append(meta, title, content);
+                    }
+                    links.forEach(entry => {
+                        const record = document.createElement('div'); showSource(entry.source, record);
+                        const stamp = document.createElement('small'); stamp.textContent = `确认于 ${entry.link.createdAt || ''}`; record.append(stamp);
+                        if (canCreate || task.assigneeUsername === currentUser) {
+                            const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button outline'; remove.textContent = '撤销关联';
+                            remove.onclick = async () => { remove.disabled = true; try {
+                                const response = await api(`${trackingBase}/links/${encodeURIComponent(entry.link.id)}`, {method:'DELETE'});
+                                if (!response.ok) { const data = await response.json(); throw new Error(data.message || '撤销失败'); }
+                                record.remove();
+                            } catch (error) { el('oa-message').textContent = error.message; remove.disabled = false; } }; record.append(remove);
+                        }
+                        saved.append(record);
+                    });
+                    if (!links.length) saved.textContent = '暂无已确认来源。';
+                    const label = document.createElement('p'); label.textContent = '选择有权限查看的后续会议（每页最多 20 场）'; trackingBody.append(label);
+                    const picker = document.createElement('div'); trackingBody.append(picker);
+                    const chosen = new Map(); let page = 1;
+                    const controls = document.createElement('div');
+                    const previous = document.createElement('button'); previous.type = 'button'; previous.textContent = '上一页';
+                    const next = document.createElement('button'); next.type = 'button'; next.textContent = '下一页';
+                    const pageLabel = document.createElement('span'); controls.append(previous, pageLabel, next); trackingBody.append(controls);
+                    async function loadPage() {
+                        const meetings = await request(`/api/meetings?page=${page}&size=20`); picker.replaceChildren();
+                        meetings.filter(item => item.id !== meetingId).forEach(item => {
+                            const field = document.createElement('label'); const input = document.createElement('input'); input.type = 'checkbox'; input.checked = chosen.has(item.id);
+                            input.onchange = () => { if (input.checked) chosen.set(item.id, item.title); else chosen.delete(item.id); };
+                            field.append(input, document.createTextNode(` ${item.title} `)); picker.append(field);
+                        });
+                        previous.disabled = page === 1; next.disabled = meetings.length < 20; pageLabel.textContent = ` 第 ${page} 页 `;
+                    }
+                    previous.onclick = () => { page--; loadPage().catch(error => el('oa-message').textContent = error.message); };
+                    next.onclick = () => { page++; loadPage().catch(error => el('oa-message').textContent = error.message); };
+                    await loadPage();
+                    const search = document.createElement('button'); search.type = 'button'; search.className = 'button outline'; search.textContent = '查找可能的进展'; trackingBody.append(search);
+                    const results = document.createElement('div'); trackingBody.append(results);
+                    search.onclick = async () => {
+                        if (!chosen.size && !search.dataset.resume) { el('oa-message').textContent = '请先选择后续会议。'; return; }
+                        search.disabled = true; results.textContent = '正在研究，请稍候……';
+                        try {
+                            const storageKey = `tracking-run:${currentUser}:${meetingId}:${task.id}`;
+                            let jobs;
+                            const prior = sessionStorage.getItem(storageKey);
+                            if (search.dataset.resume && prior) {
+                                jobs = await request(`${trackingBase}/runs/${encodeURIComponent(prior)}`);
+                            } else {
+                                jobs = await request(`${trackingBase}/runs`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({meetings:[...chosen.keys()].map(meetingId => ({meetingId}))})});
+                                if (jobs.length) sessionStorage.setItem(storageKey, jobs[0].runId);
+                            }
+                            delete search.dataset.resume;
+                            if (!jobs.length) throw new Error('未找到本次追踪任务，请重新发起。');
+                            const runId = jobs[0].runId;
+                            while (jobs.some(job => job.status === 1 || job.status === 2)) {
+                                results.textContent = jobs.map(job => `${chosen.get(job.meetingId) || job.meetingId}：${({1:'待执行',2:'研究中',3:'已完成',4:'失败'})[job.status]}`).join('；');
+                                await new Promise(resolve => setTimeout(resolve, 2000));
+                                if (!document.contains(trackingBody)) return;
+                                jobs = await request(`${trackingBase}/runs/${encodeURIComponent(runId)}`);
+                            }
+                            const answer = {answer:jobs.map(job => job.result?.answer || job.message || '').join('\n\n'), candidates:jobs.flatMap(job => job.result?.candidates || []), sources:jobs.flatMap(job => job.result?.sources || []), todos:jobs.flatMap(job => job.result?.todos || [])};
+                            if (jobs.some(job => job.status === 4)) {
+                                const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'button outline'; retry.textContent = '重试失败会议';
+                                retry.onclick = async () => { retry.disabled = true; try {
+                                    const response = await api(`${trackingBase}/runs/${encodeURIComponent(runId)}/retry`, {method:'POST'});
+                                    if (!response.ok) throw new Error('重试失败，请检查权限或重新发起');
+                                    search.dataset.resume = 'true'; search.click(); retry.remove();
+                                } catch (error) { el('oa-message').textContent = error.message; retry.disabled = false; } };
+                                trackingBody.append(retry);
+                            }
+                            results.replaceChildren(); const text = document.createElement('p'); text.style.whiteSpace = 'pre-wrap'; text.textContent = answer.answer; results.append(text);
+                            if (answer.todos?.length) { const steps = document.createElement('ol'); answer.todos.forEach(todo => { const step = document.createElement('li'); step.textContent = `${todo.content}（${({1:'待处理',2:'进行中',3:'已完成'})[todo.status] || '未知'}）`; steps.append(step); }); results.append(steps); }
+                            const hint = document.createElement('p'); hint.className = 'tracking-source-meta'; hint.textContent = answer.candidates?.length ? '请核对证据后确认关联。' : '没有可确认的关联候选。历史报告需重新研究以生成结构化候选。'; results.append(hint);
+                            for (const entry of answer.candidates || []) {
+                                const source = entry.source, finding = entry.finding;
+                                const candidate = document.createElement('article'); candidate.className = 'tracking-candidate';
+                                const header = document.createElement('div'); header.className = 'tracking-candidate-header';
+                                const title = document.createElement('strong'); title.textContent = finding.title;
+                                const badge = document.createElement('span'); badge.className = 'tracking-relation'; badge.textContent = finding.relation === 1 ? '明确相关' : '可能相关';
+                                header.append(title, badge); candidate.append(header);
+                                function detail(label, value) {
+                                    if (!value) return;
+                                    const line = document.createElement('p'); const key = document.createElement('strong'); key.textContent = label + '：';
+                                    line.append(key, document.createTextNode(value)); candidate.append(line);
+                                }
+                                detail('关联理由', finding.reason);
+                                detail('原文证据', finding.evidence);
+                                detail('待确认', finding.uncertainty);
+                                const disclosure = document.createElement('details'); const summary = document.createElement('summary'); summary.textContent = '查看完整纪要来源'; disclosure.append(summary);
+                                const fullSource = document.createElement('div'); showSource(source, fullSource); disclosure.append(fullSource); candidate.append(disclosure);
+                                if (canCreate || task.assigneeUsername === currentUser) {
+                                    const confirm = document.createElement('button'); confirm.type = 'button'; confirm.className = 'button outline'; confirm.textContent = '确认关联';
+                                    confirm.onclick = async () => { confirm.disabled = true; try {
+                                        await request(`${trackingBase}/links`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sourceMeetingId:source.meetingId, minutesVersion:source.minutesVersion, sectionIndex:source.sectionIndex})});
+                                        if (saved.textContent === '暂无已确认来源。') saved.replaceChildren(); showSource(source, saved); confirm.textContent = '已确认';
+                                    } catch (error) { el('oa-message').textContent = error.message; confirm.disabled = false; } }; candidate.append(confirm);
+                                }
+                                results.append(candidate);
+                            }
+                        } catch (error) { results.textContent = error.message; } finally { search.disabled = false; }
+                    };
+                    tracking.dataset.loaded = 'true';
+                    if (sessionStorage.getItem(`tracking-run:${currentUser}:${meetingId}:${task.id}`)) { search.dataset.resume = 'true'; search.click(); }
+                } catch (error) { trackingBody.textContent = error.message; }
+            });
+            row.append(tracking);
             if (canCreate || task.assigneeUsername === currentUser) {
                 const transitions = task.status === 1 ? [[2, '开始处理'], [3, '完成'], [4, '取消']] : task.status === 2 ? [[3, '完成'], [4, '取消']] : task.status === 3 ? [[2, '重新打开']] : [];
                 const controls = document.createElement('div');

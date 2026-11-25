@@ -11,6 +11,7 @@ import com.ylz.futuremade.prompt.model.entity.PromptVersion;
 import com.ylz.futuremade.prompt.service.PromptService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.ai.chat.prompt.PromptTemplate;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
@@ -217,8 +218,10 @@ public class TopicAnalysisService {
             List<String> reasons = review.issues().stream()
                     .filter(issue -> issue.candidateIds().stream().anyMatch(id -> scope.contains(candidateTopics.get(id))))
                     .map(OutlineReviewIssue::reason).toList();
-            calls.feedback = "依据审核意见修正本批议题标题或合并相近议题，不得拆分议题。"
-                    + "只返回本批议题 id，禁止生成候选编号。审核意见：" + json.writeValueAsString(reasons);
+            String revisionTemplate = prompts.active(PromptScenarioCode.TOPIC_REVISION_FEEDBACK.code()).getContent();
+            Map<String, Object> revisionVariables = new HashMap<>();
+            revisionVariables.put("reasons", json.writeValueAsString(reasons));
+            calls.feedback = new PromptTemplate(revisionTemplate).render(revisionVariables);
             List<TopicGroupingInput> units = List.of();
             String input = "";
             // 保留全部议题及审核意见，仅逐级缩减辅助摘要；不把全部候选正文重新发送。
@@ -353,15 +356,9 @@ public class TopicAnalysisService {
                 previousFailures.add(invalidOutput);
                 log.warn("归并输出校验失败，准备纠错，taskId={}，retry={}，candidateCount={}，exceptionType={}",
                         requestKey, attempt + 1, units.size(), invalidOutput.getClass().getName());
-                request = json.writeValueAsString(new TopicGroupingCorrectionInput(
-                        "上次归并结果格式或编号校验失败，请重新生成完整 JSON。只使用 candidates 中的 id，"
-                                + "每个 id 必须且只能出现在一个分组中，不得重复、遗漏或编造。"
-                                + "返回 {groups:[{topic:主题名称,ids:[输入编号]}]}，字段名和字符串需使用 JSON 双引号。",
-                        units));
-                if (calls.feedback != null) {
-                    request = json.writeValueAsString(new TopicGroupingCorrectionInput(
-                            calls.feedback + "。上次输出校验失败，请严格保证所有输入编号恰好出现一次。", units));
-                }
+                String correction = prompts.active(PromptScenarioCode.TOPIC_VALIDATION_FEEDBACK.code()).getContent();
+                String feedback = calls.feedback == null ? correction : calls.feedback + "\n" + correction;
+                request = json.writeValueAsString(new TopicGroupingCorrectionInput(feedback, units));
             }
         }
     }
