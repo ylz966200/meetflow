@@ -12,6 +12,7 @@ import com.ylz.futuremade.meeting.model.dto.ExtractionToolTrace;
 import com.ylz.futuremade.prompt.service.PromptService;
 
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -25,16 +26,25 @@ public class ResearchToolAuditInterceptor extends ToolInterceptor {
     private final List<ExtractionToolTrace> traces;
     private final PromptService prompts;
     private final ObjectMapper json;
+    private final Consumer<ToolCallResponse> onToolResult;
 
     public ResearchToolAuditInterceptor(Set<String> allowedTools, AtomicReference<RuntimeException> toolFailure,
                                         AiCallContext audit, List<ExtractionToolTrace> traces,
                                         PromptService prompts, ObjectMapper json) {
+        this(allowedTools, toolFailure, audit, traces, prompts, json, response -> {});
+    }
+
+    public ResearchToolAuditInterceptor(Set<String> allowedTools, AtomicReference<RuntimeException> toolFailure,
+                                        AiCallContext audit, List<ExtractionToolTrace> traces,
+                                        PromptService prompts, ObjectMapper json,
+                                        Consumer<ToolCallResponse> onToolResult) {
         this.allowedTools = Set.copyOf(allowedTools);
         this.toolFailure = toolFailure;
         this.audit = audit;
         this.traces = traces;
         this.prompts = prompts;
         this.json = json;
+        this.onToolResult = onToolResult;
     }
 
     @Override
@@ -54,6 +64,8 @@ public class ResearchToolAuditInterceptor extends ToolInterceptor {
             response = ToolCallResponse.of(request.getToolCallId(), request.getToolName(), feedback);
         }
         record(request, response);
+        // 参数错误反馈不是有效的工具业务结果，不能据此扩展可引用来源。
+        if (failure == null) onToolResult.accept(response);
         return response;
     }
 

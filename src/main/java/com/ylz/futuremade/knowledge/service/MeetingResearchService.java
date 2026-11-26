@@ -2,7 +2,7 @@ package com.ylz.futuremade.knowledge.service;
 
 import com.ylz.futuremade.assistant.model.dto.AiCallContext;
 import com.ylz.futuremade.assistant.service.ToolCallingExecutor;
-import com.ylz.futuremade.assistant.service.FrameworkResearchAgent;
+import com.ylz.futuremade.assistant.service.ReactAgentExecutor;
 import com.ylz.futuremade.knowledge.model.dto.*;
 import org.springframework.ai.converter.BeanOutputConverter;
 import com.ylz.futuremade.knowledge.enums.ProgressRelation;
@@ -37,13 +37,13 @@ public class MeetingResearchService {
     private final PromptService prompts;
     private final ToolCallingExecutor executor;
     private final int maxMeetings;
-    private final FrameworkResearchAgent framework;
+    private final ReactAgentExecutor framework;
     @Value("${meetflow.tracking.max-delegated-input-chars:8000}")
     private int maxDelegatedInputChars = 8000;
     private final AuthorizedToolRegistry registry;
 
     public MeetingResearchService(MultiMeetingKnowledgeAccessService access, MinutesService minutes,
-                                  PromptService prompts, ToolCallingExecutor executor, AuthorizedToolRegistry registry, FrameworkResearchAgent framework,
+                                  PromptService prompts, ToolCallingExecutor executor, AuthorizedToolRegistry registry, ReactAgentExecutor framework,
                                   @Value("${meetflow.knowledge.max-meetings:5}") int maxMeetings) {
         this.access = access;
         this.minutes = minutes;

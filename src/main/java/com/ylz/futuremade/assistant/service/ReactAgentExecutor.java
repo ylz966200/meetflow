@@ -1,6 +1,8 @@
 package com.ylz.futuremade.assistant.service;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.alibaba.cloud.ai.graph.agent.interceptor.ToolCallResponse;
+import java.util.function.Consumer;
 import com.ylz.futuremade.assistant.hook.AgentLifecycleLoggingHook;
 import com.ylz.futuremade.assistant.interceptor.AgentModelLoggingInterceptor;
 import com.ylz.futuremade.assistant.interceptor.AgentToolLoggingInterceptor;
@@ -26,15 +28,15 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 让 Alibaba Agent Framework 编排研究会话，通过扩展点保留调用与工具审计。
+ * 基于 Alibaba ReactAgent 执行工具调用会话，统一接入模型网关、权限审计和生命周期日志。
  */
 @Component
-public class FrameworkResearchAgent {
+public class ReactAgentExecutor {
     private final AiModelGateway models;
     private final PromptService prompts;
     private final ObjectMapper json;
 
-    public FrameworkResearchAgent(AiModelGateway models, PromptService prompts, ObjectMapper json) {
+    public ReactAgentExecutor(AiModelGateway models, PromptService prompts, ObjectMapper json) {
         this.models = models;
         this.prompts = prompts;
         this.json = json;
@@ -51,6 +53,12 @@ public class FrameworkResearchAgent {
      * 使用框架输出类型生成结构化响应约束。
      */
     public String execute(String name, AiCallContext audit, String content, ToolCallback[] callbacks, Class<?> outputType) throws Exception {
+        return execute(name, audit, content, callbacks, outputType, response -> {});
+    }
+
+    /** 工具成功后通知业务层记录可见来源；工具循环仍由 ReactAgent 编排。 */
+    public String execute(String name, AiCallContext audit, String content, ToolCallback[] callbacks,
+                          Class<?> outputType, Consumer<ToolCallResponse> onToolResult) throws Exception {
         AtomicReference<RuntimeException> toolFailure = new AtomicReference<>();
         AtomicReference<RuntimeException> modelFailure = new AtomicReference<>();
         AtomicInteger modelCalls = new AtomicInteger();
@@ -87,7 +95,7 @@ public class FrameworkResearchAgent {
                 .hooks(lifecycleLogging)
                 .interceptors(new AgentModelLoggingInterceptor(name, audit, modelCalls, modelFailure))
                 .interceptors(new AgentToolLoggingInterceptor(name, audit, toolCalls, allowed))
-                .interceptors(new ResearchToolAuditInterceptor(allowed, toolFailure, audit, traces, prompts, json));
+                .interceptors(new ResearchToolAuditInterceptor(allowed, toolFailure, audit, traces, prompts, json, onToolResult));
         if (outputType != null) builder.outputType(outputType);
         ReactAgent agent = builder.build();
         try {
