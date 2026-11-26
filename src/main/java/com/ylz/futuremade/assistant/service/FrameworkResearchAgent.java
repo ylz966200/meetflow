@@ -1,11 +1,10 @@
 package com.ylz.futuremade.assistant.service;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
-import com.alibaba.cloud.ai.graph.agent.interceptor.ToolCallHandler;
-import com.alibaba.cloud.ai.graph.agent.interceptor.ToolCallRequest;
-import com.alibaba.cloud.ai.graph.agent.interceptor.ToolCallResponse;
-import com.alibaba.cloud.ai.graph.agent.interceptor.ToolInterceptor;
-import com.fasterxml.jackson.core.JsonProcessingException;
+import com.ylz.futuremade.assistant.hook.AgentLifecycleLoggingHook;
+import com.ylz.futuremade.assistant.interceptor.AgentModelLoggingInterceptor;
+import com.ylz.futuremade.assistant.interceptor.AgentToolLoggingInterceptor;
+import com.ylz.futuremade.assistant.interceptor.ResearchToolAuditInterceptor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ylz.futuremade.assistant.model.dto.AiCallContext;
 import com.ylz.futuremade.meeting.model.dto.ExtractionToolTrace;
@@ -24,13 +23,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 让 Alibaba Agent Framework 编排研究会话，通过扩展点保留调用与工具审计。
  */
 @Component
 public class FrameworkResearchAgent {
-    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(FrameworkResearchAgent.class);
     private final AiModelGateway models;
     private final PromptService prompts;
     private final ObjectMapper json;
@@ -48,9 +47,15 @@ public class FrameworkResearchAgent {
         return execute(name, audit, content, callbacks, null);
     }
 
-    /** 使用框架输出类型生成结构化响应约束。 */
+    /**
+     * 使用框架输出类型生成结构化响应约束。
+     */
     public String execute(String name, AiCallContext audit, String content, ToolCallback[] callbacks, Class<?> outputType) throws Exception {
         AtomicReference<RuntimeException> toolFailure = new AtomicReference<>();
+        AtomicReference<RuntimeException> modelFailure = new AtomicReference<>();
+        AtomicInteger modelCalls = new AtomicInteger();
+        AtomicInteger toolCalls = new AtomicInteger();
+        AgentLifecycleLoggingHook lifecycleLogging = new AgentLifecycleLoggingHook(name, audit, modelCalls, toolCalls, modelFailure);
         Set<String> allowed = new HashSet<>();
         List<ToolCallback> guarded = Arrays.stream(callbacks)
                 .map(callback -> {
@@ -64,56 +69,35 @@ public class FrameworkResearchAgent {
                 .chatOptions(ToolCallingChatOptions.builder().internalToolExecutionEnabled(false).build())
                 .model(prompt -> {
                     traces.clear();
-                    ChatResponse response = models.call(audit, prompt);
-                    if (response.hasFinishReasons(Set.of("length", "LENGTH")))
-                        throw new ModelOutputTruncatedException();
+                    ChatResponse response;
+                    try {
+                        response = models.call(audit, prompt);
+                        if (response.hasFinishReasons(Set.of("length", "LENGTH")))
+                            throw new ModelOutputTruncatedException();
+                    } catch (RuntimeException ex) {
+                        // 框架模型节点可能吞掉异常；保存原异常供调用结束后重新抛出。
+                        modelFailure.set(ex);
+                        throw ex;
+                    }
                     return response;
                 })
                 .tools(guarded)
                 .parallelToolExecution(false)
                 .wrapSyncToolsAsAsync(false)
-                .interceptors(new ToolInterceptor() {
-                    @Override
-                    public String getName() {
-                        return "research_tool_audit";
-                    }
-
-                    @Override
-                    public ToolCallResponse interceptToolCall(ToolCallRequest request, ToolCallHandler handler) {
-                        if (!allowed.contains(request.getToolName()))
-                            throw new IllegalStateException("模型请求了未授权的工具");
-                        ToolCallResponse response = handler.call(request);
-                        RuntimeException failure = toolFailure.getAndSet(null);
-                        if (failure != null) {
-                            String feedback = ToolCallingExecutor.argumentErrorFeedback(failure);
-                            if (feedback == null) {
-                                log.warn("研究工具执行失败，agent={}，tool={}，调用记录 ID={}",
-                                        name, request.getToolName(), audit.getLastCallId());
-                                throw failure;
-                            }
-                            response = ToolCallResponse.of(request.getToolCallId(), request.getToolName(), feedback);
-                        }
-                        record(audit, traces, request, response);
-                        return response;
-                    }
-                });
+                .hooks(lifecycleLogging)
+                .interceptors(new AgentModelLoggingInterceptor(name, audit, modelCalls, modelFailure))
+                .interceptors(new AgentToolLoggingInterceptor(name, audit, toolCalls, allowed))
+                .interceptors(new ResearchToolAuditInterceptor(allowed, toolFailure, audit, traces, prompts, json));
         if (outputType != null) builder.outputType(outputType);
         ReactAgent agent = builder.build();
-        return agent.call(new UserMessage(content)).getText();
-    }
-
-    private void record(AiCallContext audit, List<ExtractionToolTrace> traces,
-                        ToolCallRequest request, ToolCallResponse response) {
-        ExtractionToolTrace trace = new ExtractionToolTrace();
-        trace.setCallId(request.getToolCallId());
-        trace.setName(request.getToolName());
-        trace.setArguments(request.getArguments());
-        trace.setResult(response.getResult());
-        traces.add(trace);
         try {
-            prompts.recordToolTrace(audit.getLastCallId(), json.writeValueAsString(traces));
-        } catch (JsonProcessingException ex) {
-            throw new IllegalStateException("无法序列化工具调用审计", ex);
+            String answer = agent.call(new UserMessage(content)).getText();
+            if (modelFailure.get() != null) throw modelFailure.get();
+            return answer;
+        } catch (Exception ex) {
+            // afterAgent 不保证在异常时执行，保留失败日志并继续抛出原异常。
+            lifecycleLogging.logFailure(ex);
+            throw ex;
         }
     }
 

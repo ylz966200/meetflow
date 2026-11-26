@@ -4,17 +4,29 @@ package com.ylz.futuremade.prompt.enums;
  * 系统内置的提示词业务场景，编码与数据库和接口保持一致。
  */
 public enum PromptScenarioCode {
-    /** 单Agent研究待办进展并返回结构化证据。 */
+    /**
+     * 单Agent研究待办进展并返回结构化证据。
+     */
     MEETING_PROGRESS_RESEARCH("MEETING_PROGRESS_RESEARCH"),
-    /** 议题审核修正时的反馈模板。 */
+    /**
+     * 议题审核修正时的反馈模板。
+     */
     TOPIC_REVISION_FEEDBACK("TOPIC_REVISION_FEEDBACK"),
-    /** 议题归并格式和编号纠错反馈模板。 */
+    /**
+     * 议题归并格式和编号纠错反馈模板。
+     */
     TOPIC_VALIDATION_FEEDBACK("TOPIC_VALIDATION_FEEDBACK"),
-    /** 将委派目标和待办数据渲染为子研究用户输入。 */
+    /**
+     * 将委派目标和待办数据渲染为子研究用户输入。
+     */
     TASK_TRACKING_RESEARCH_INPUT("TASK_TRACKING_RESEARCH_INPUT"),
-    /** 协调待办追踪子Agent并综合来源证据。 */
+    /**
+     * 协调待办追踪子Agent并综合来源证据。
+     */
     TASK_TRACKING_COORDINATOR("TASK_TRACKING_COORDINATOR"),
-    /** 基于授权会议的资料开展多步研究。 */
+    /**
+     * 基于授权会议的资料开展多步研究。
+     */
     MEETING_RESEARCH("MEETING_RESEARCH"),
     /**
      * 基于预期事实与检索来源评审会议知识问答。

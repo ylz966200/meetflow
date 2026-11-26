@@ -40,7 +40,9 @@ public class ToolCallingExecutor {
     private static final Logger log = LoggerFactory.getLogger(ToolCallingExecutor.class);
     // 只允许本次业务提供的工具，禁用从全局解析器查找其他工具。
     private final ToolCallingManager toolManager = ToolCallingManager.builder()
-            .toolCallbackResolver(name -> { throw new IllegalStateException("模型请求了未授权的工具"); })
+            .toolCallbackResolver(name -> {
+                throw new IllegalStateException("模型请求了未授权的工具");
+            })
             .toolExecutionExceptionProcessor(new DefaultToolExecutionExceptionProcessor(true))
             .build();
     private final AiModelGateway models;
@@ -92,8 +94,8 @@ public class ToolCallingExecutor {
     }
 
     private ToolCallback auditedCallback(ToolCallback delegate, Iterator<AssistantMessage.ToolCall> calls,
-            AiCallContext audit, AtomicInteger count, int maxCalls, List<ExtractionToolTrace> traces,
-            ToolResultHandler handler) {
+                                         AiCallContext audit, AtomicInteger count, int maxCalls, List<ExtractionToolTrace> traces,
+                                         ToolResultHandler handler) {
         return new ToolCallback() {
             @Override
             public ToolDefinition getToolDefinition() {
@@ -162,7 +164,7 @@ public class ToolCallingExecutor {
     /**
      * 仅将参数反序列化错误反馈给模型，业务异常仍按原路径处理。
      */
-    static String argumentErrorFeedback(Throwable failure) {
+    public static String argumentErrorFeedback(Throwable failure) {
         JsonProcessingException formatError = findJsonError(failure);
         if (formatError == null) return null;
         return "工具参数格式无效（字段：" + errorField(formatError)
